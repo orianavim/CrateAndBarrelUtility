@@ -1,0 +1,21 @@
+{
+  "name": "CrateParser",
+  "version": "1.0.0",
+  "description": "Crate & Barrel order/ASN reconciliation tool for Grasshopper Labs inbound manifests",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node src/server.js",
+    "test": "node test/run-test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "multer": "^2.0.0",
+    "xlsx": "^0.18.5"
+  },
+  "private": true
+}

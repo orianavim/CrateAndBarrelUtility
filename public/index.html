@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Crate &amp; Barrel · Inbound Manifest</title>
+<style>
+  :root {
+    --paper:#ffffff; --ink:#1a1a1a; --ink-soft:#5c5c5c; --line:#e3ded6;
+    --bg:#f7f5f1; --accent:#1a1a1a; --warm:#9c6b3f; --green:#2f7d4f;
+    --red:#b4322a; --amber:#9a6a16; --field:#ffffff;
+  }
+  * { box-sizing:border-box; }
+  html,body { margin:0; }
+  body { font:15px/1.6 "Helvetica Neue",Arial,sans-serif; color:var(--ink); background:var(--bg); }
+  .serif { font-family:Georgia,"Times New Roman",serif; }
+
+  .topbar { background:var(--paper); border-bottom:1px solid var(--line); }
+  .topbar-inner { max-width:1120px; margin:0 auto; padding:18px 28px; display:flex; align-items:center; gap:20px; }
+  .wordmark { font-family:Georgia,serif; font-size:22px; letter-spacing:.5px; color:var(--ink); white-space:nowrap; }
+  .wordmark b { font-weight:700; }
+  .wordmark .amp { font-style:italic; }
+  .topbar .divider { width:1px; height:30px; background:var(--line); }
+  .topbar .sub { font-size:11px; letter-spacing:.18em; text-transform:uppercase; color:var(--ink-soft); }
+  .topbar .pulse { margin-left:auto; display:flex; align-items:center; gap:14px; }
+  .topbar .pulse img { height:30px; width:auto; display:block; }
+  .userbox { font-size:12px; color:var(--ink-soft); text-align:right; }
+  .userbox a { color:var(--warm); cursor:pointer; text-decoration:none; }
+  .userbox a:hover { text-decoration:underline; }
+
+  main { max-width:1120px; margin:0 auto; padding:34px 28px 60px; }
+
+  .card { background:var(--paper); border:1px solid var(--line); border-radius:2px; padding:28px; margin-bottom:24px; }
+  .step { font-size:11px; letter-spacing:.2em; text-transform:uppercase; color:var(--warm); margin-bottom:6px; }
+  h2 { font-family:Georgia,serif; font-size:20px; font-weight:600; margin:0 0 4px; }
+  .lead { color:var(--ink-soft); margin:0 0 18px; }
+
+  .login-wrap { min-height:calc(100vh - 150px); display:flex; align-items:center; justify-content:center; }
+  .login { width:100%; max-width:430px; }
+  .login .card { padding:34px; }
+  .login h2 { text-align:center; }
+  .login .lead { text-align:center; }
+  label { display:block; font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-soft); margin:16px 0 6px; }
+  input, select { width:100%; padding:11px 12px; border:1px solid var(--line); border-radius:2px; background:var(--field);
+                  font:inherit; color:var(--ink); }
+  input:focus, select:focus { outline:none; border-color:var(--ink); }
+  .seg { display:flex; border:1px solid var(--line); border-radius:2px; overflow:hidden; }
+  .seg button { flex:1; background:var(--paper); border:none; padding:10px; cursor:pointer; font:inherit; color:var(--ink-soft); }
+  .seg button.on { background:var(--ink); color:#fff; }
+
+  button.btn { font:inherit; border:1px solid var(--ink); background:var(--ink); color:#fff; border-radius:2px;
+               padding:12px 22px; cursor:pointer; letter-spacing:.06em; text-transform:uppercase; font-size:13px; }
+  button.btn.full { width:100%; margin-top:22px; }
+  button.btn.light { background:var(--paper); color:var(--ink); }
+  button.btn.danger { background:var(--red); border-color:var(--red); }
+  button.btn:disabled { opacity:.45; cursor:not-allowed; }
+  .linklike { background:none; border:none; color:var(--ink-soft); cursor:pointer; text-decoration:underline; font:inherit; }
+
+  .badge { font-size:11px; letter-spacing:.12em; text-transform:uppercase; padding:4px 10px; border:1px solid var(--line); border-radius:20px; color:var(--ink-soft); }
+  .badge.mock { color:var(--amber); border-color:var(--amber); }
+  .badge.live { color:var(--green); border-color:var(--green); }
+
+  .drop { border:1.5px dashed var(--line); border-radius:2px; padding:38px; text-align:center; cursor:pointer; transition:.15s; background:var(--bg); }
+  .drop.drag { border-color:var(--ink); background:#fff; }
+  .drop p { margin:5px 0; color:var(--ink-soft); }
+  .filelist { list-style:none; padding:0; margin:14px 0 0; }
+  .filelist li { display:flex; justify-content:space-between; align-items:center; padding:9px 12px; border:1px solid var(--line); border-radius:2px; margin-bottom:6px; font-size:13px; }
+  .pill { font-size:11px; letter-spacing:.08em; text-transform:uppercase; padding:2px 9px; border-radius:20px; }
+  .pill.delivery { background:#eef2f7; color:#3a5a8c; }
+  .pill.asn { background:#eaf4ee; color:var(--green); }
+  .pill.unknown,.pill.error { background:#f8eceb; color:var(--red); }
+
+  .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:14px; }
+  .stat { border:1px solid var(--line); border-radius:2px; padding:16px; background:var(--bg); }
+  .stat .n { font-family:Georgia,serif; font-size:30px; }
+  .stat .l { font-size:12px; color:var(--ink-soft); margin-top:2px; }
+  .stat.cancel .n { color:var(--red); }
+  .stat.manifest .n { color:var(--green); }
+
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:left; padding:9px 10px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th { color:var(--ink-soft); font-weight:600; font-size:11px; letter-spacing:.06em; text-transform:uppercase; position:sticky; top:0; background:var(--paper); }
+  .scroll { max-height:340px; overflow:auto; border:1px solid var(--line); border-radius:2px; }
+
+  .warn { background:#fbf6ea; border:1px solid var(--amber); color:#7a5410; padding:11px 14px; border-radius:2px; font-size:13px; margin-bottom:14px; }
+  .err { color:var(--red); } .ok { color:var(--green); }
+  .muted { color:var(--ink-soft); font-size:13px; }
+  .hidden { display:none; }
+  .spinner { display:inline-block; width:15px; height:15px; border:2px solid var(--line); border-top-color:var(--ink); border-radius:50%; animation:spin .7s linear infinite; vertical-align:-2px; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .logtag { display:inline-block; min-width:52px; text-align:center; font-size:10px; text-transform:uppercase;
+            letter-spacing:.06em; padding:1px 6px; border-radius:10px; margin-right:8px; vertical-align:1px; }
+  .logtag.cancel { background:#f8eceb; color:var(--red); }
+  .logtag.match  { background:#eaf4ee; color:var(--green); }
+  .logtag.skip   { background:#fbf6ea; color:#8a6312; }
+  .logtag.asn    { background:#eef2f7; color:#3a5a8c; }
+  .logtag.info   { background:#ecebe7; color:#555; }
+  .logtag.create { background:#eef7ee; color:#2f7d4f; }
+  #logList > div { padding:3px 0; border-bottom:1px solid #f0ece4; }
+  .chip { padding:5px 12px; border:1px solid var(--line); border-radius:20px; cursor:pointer; font-size:12px; color:var(--ink-soft); }
+  .chip.on { color:var(--ink); border-color:var(--ink); }
+  tr.row-creating { background:#fff7e6; }
+  tr.row-failed { background:#fbeceb; }
+  .state { font-size:11px; padding:2px 8px; border-radius:12px; white-space:nowrap; }
+  .state.matched, .state.created { background:#eaf4ee; color:#2f7d4f; }
+  .state.pending_create { background:#f3eee6; color:#7a5410; }
+  .state.creating { background:#fff0d6; color:#8a6312; }
+  .state.failed, .state.pending_cancel { background:#f8eceb; color:#b4322a; }
+  footer { text-align:center; color:var(--ink-soft); font-size:12px; padding:24px; }
+  footer img { height:20px; vertical-align:-5px; margin-left:6px; opacity:.8; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <span class="wordmark serif">Crate<span class="amp serif">&amp;</span><b>Barrel</b></span>
+    <div class="divider"></div>
+    <span class="sub">Inbound&nbsp;Manifest&nbsp;Utility</span>
+    <div class="pulse">
+      <span id="topBadge" class="badge hidden"></span>
+      <div id="userbox" class="userbox hidden"></div>
+      <img src="https://images.squarespace-cdn.com/content/v1/65e601fcee899853a1f8b308/884eccf4-96a9-425a-a365-fa97d1439f84/Pulse-Final-Mile-Logo-Large+%28No+Tagline%29.png?format=750w" alt="Pulse Final Mile" />
+    </div>
+  </div>
+</div>
+
+<!-- ============================ LOGIN ============================ -->
+<div id="loginView" class="login-wrap hidden">
+  <div class="login">
+    <div class="card">
+      <div class="step" style="text-align:center;">Grasshopper Sign-in</div>
+      <h2 class="serif">Sign in to continue</h2>
+      <p class="lead">Authenticate with your Grasshopper Labs credentials to access the manifest utility.</p>
+
+      <label>Environment</label>
+      <div class="seg" id="envSeg">
+        <button type="button" data-env="staging" class="on">Staging</button>
+        <button type="button" data-env="production">Production</button>
+      </div>
+
+      <label>Client ID</label>
+      <input id="liEmail" type="text" autocomplete="username" placeholder="you@grasshopperlabs.io" />
+
+      <label>Client Secret</label>
+      <input id="liPass" type="password" autocomplete="current-password" placeholder="••••••••" />
+
+      <button id="loginBtn" class="btn full">Sign in</button>
+      <div id="loginMsg" class="muted" style="margin-top:12px; text-align:center; min-height:18px;"></div>
+
+      <div id="mockRow" class="hidden" style="text-align:center; margin-top:14px; border-top:1px solid var(--line); padding-top:14px;">
+        <button id="mockBtn" class="linklike">Continue in mock mode (no live API calls)</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================ APP ============================ -->
+<div id="appView" class="hidden">
+<main>
+  <div class="card">
+    <div class="step">Account</div>
+    <h2 class="serif">Retailer &amp; region</h2>
+    <p class="lead">Orders are pulled only for this retailer (account). Saved on this device and reused next time.</p>
+    <div class="row" style="margin-bottom:10px;">
+      <input id="retailerInput" type="text" placeholder="Retailer ID (e.g. 5c65a4821c272100216b3ae5)" style="max-width:420px;" />
+    </div>
+    <div class="row" style="margin-bottom:12px;">
+      <input id="retailerIdentifierInput" type="text" placeholder="Retailer identifier for creating orders (e.g. 1brooklynfurniture)" style="max-width:420px;" />
+      <button id="saveRetailer" class="btn light">Save</button>
+      <span id="retailerMsg" class="muted"></span>
+    </div>
+    <div class="row">
+      <label style="margin:0 8px 0 0;">Region</label>
+      <select id="regionSelect" style="max-width:420px;"><option value="">Loading regions…</option></select>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="step">Step 1</div>
+    <h2 class="serif">Upload files</h2>
+    <p class="lead">Upload whichever you have &mdash; file type is detected automatically:
+      <b>MXD Delivery</b> (orders) only &rarr; create &amp; cancel; <b>MXD ASN</b> trailer file(s) only &rarr; build the manifest; or both for the full flow.</p>
+    <div id="drop" class="drop">
+      <p><b>Drag &amp; drop</b> .XLS / .XLSX files here</p>
+      <p>or click to browse</p>
+      <input id="fileInput" type="file" multiple accept=".xls,.xlsx" class="hidden" />
+    </div>
+    <ul id="fileList" class="filelist"></ul>
+    <div class="row" style="margin-top:18px;">
+      <button id="analyzeBtn" class="btn" disabled>Analyze</button>
+      <button id="clearBtn" class="btn light" disabled>Clear</button>
+      <span id="analyzeMsg" class="muted"></span>
+    </div>
+  </div>
+
+  <!-- Step 2: Orders & status -->
+  <div id="createCard" class="card hidden">
+    <div class="step">Step 2</div>
+    <h2 class="serif">Orders &amp; status</h2>
+    <div id="fileSummaryLine" class="muted" style="margin-bottom:12px;"></div>
+    <div id="createSummary"></div>
+    <div class="row" id="poFilters" style="margin:12px 0;"></div>
+    <div id="poTableWrap" class="scroll" style="max-height:440px;"></div>
+    <div id="createFailSummary" style="margin-top:10px;"></div>
+    <div class="row" style="margin-top:16px;">
+      <button id="createBtn" class="btn hidden">Create <span id="createCount">0</span> orders</button>
+      <button id="continueBtn" class="btn light hidden">Continue to cancel step</button>
+      <span id="createMsg" class="muted"></span>
+    </div>
+  </div>
+
+  <!-- Step 3: Cancel orders not on the file -->
+  <div id="cancelCard" class="card hidden">
+    <div class="step">Step 3</div>
+    <h2 class="serif">Cancel orders not on the file</h2>
+    <p class="lead">These are pending in Grasshopper but not on today&rsquo;s delivery file. Select which to cancel, then cancel them &mdash; or skip. Cancelling cannot be undone.</p>
+    <div id="tabCancel" class="scroll"></div>
+    <div class="row" style="margin-top:14px;">
+      <button id="cancelBtn" class="btn danger">Cancel selected (<span id="cancelCount">0</span>)</button>
+      <button id="skipCancelBtn" class="btn light">Skip &amp; continue to matching</button>
+      <span id="actionMsg" class="muted"></span>
+    </div>
+  </div>
+
+  <!-- Step 4: Inbound manifest -->
+  <div id="results" class="card hidden">
+    <div class="step">Step 4</div>
+    <h2 class="serif">Inbound manifest</h2>
+    <div class="stats" id="stats"></div>
+    <div id="asnSkuPanel" style="margin-top:18px;">
+      <div class="step">Inbound SKUs (from ASN)</div>
+      <div id="asnSkuList" class="scroll" style="max-height:130px; padding:10px; font-size:12px; line-height:1.9;"></div>
+    </div>
+    <div class="step" style="margin-top:18px;">Inbound Manifest (line items, FIFO)</div>
+    <div id="tabManifest" class="scroll" style="margin-top:6px;"></div>
+
+    <div class="step" style="margin-top:20px;">Create inbound manifest in Grasshopper</div>
+    <p class="lead" style="margin:4px 0 10px;">Creates an inbound freight manifest and adds every matched order &amp; line item above.</p>
+    <div class="row">
+      <input id="manifestName" type="text" value="Inbound freight" placeholder="Manifest name" style="max-width:260px;" />
+      <label style="margin:0 6px 0 0;">Inbound date</label>
+      <input id="manifestDate" type="date" style="max-width:170px;" />
+      <button id="createManifestBtn" class="btn">Create inbound manifest</button>
+      <span id="manifestMsg" class="muted"></span>
+    </div>
+
+    <div class="row" style="margin-top:16px;">
+      <button id="downloadBtn" class="btn light">Download manifest (.xlsx)</button>
+    </div>
+  </div>
+
+  <div id="logCard" class="card hidden">
+    <div class="step">Behind the scenes</div>
+    <h2 class="serif">Decision log</h2>
+    <p class="lead">Every keep, cancel and match decision in plain language. Search by order #, order ID, or SKU.</p>
+    <div class="row">
+      <input id="logSearch" type="text" placeholder="Search… e.g. an order # or a SKU" style="max-width:480px;" />
+      <span id="logCount" class="muted"></span>
+    </div>
+    <div class="row" id="logFilters" style="margin:12px 0;"></div>
+    <div id="logList" class="scroll" style="max-height:420px; font-size:12.5px; line-height:1.7; padding:8px 14px;"></div>
+  </div>
+</main>
+</div>
+
+<footer>
+  Crate &amp; Barrel inbound operations &middot; powered by
+  <img src="https://images.squarespace-cdn.com/content/v1/65e601fcee899853a1f8b308/884eccf4-96a9-425a-a365-fa97d1439f84/Pulse-Final-Mile-Logo-Large+%28No+Tagline%29.png?format=300w" alt="Pulse Final Mile" />
+</footer>
+
+<script>
+let files = [], jobId = null, selectedEnv = 'staging', analyzeData = null;
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+// ---------- persistent retailer id (cookie) ----------
+const RETAILER_COOKIE = 'cb_retailer_id';
+const RETAILER_IDENT_COOKIE = 'cb_retailer_identifier';
+const REGION_COOKIE = 'cb_region_id';
+function getCookie(name) {
+  const m = document.cookie.split(';').map(s => s.trim()).find(s => s.startsWith(name + '='));
+  return m ? decodeURIComponent(m.slice(name.length + 1)) : '';
+}
+function setCookie(name, val) {
+  document.cookie = `${name}=${encodeURIComponent(val)}; Path=/; Max-Age=${60*60*24*365}; SameSite=Lax`;
+}
+function currentRetailer() { return ($('retailerInput') && $('retailerInput').value.trim()) || getCookie(RETAILER_COOKIE); }
+function currentRetailerIdentifier() { return ($('retailerIdentifierInput') && $('retailerIdentifierInput').value.trim()) || getCookie(RETAILER_IDENT_COOKIE); }
+function currentRegion() { return ($('regionSelect') && $('regionSelect').value) || getCookie(REGION_COOKIE); }
+window.addEventListener('DOMContentLoaded', () => {
+  if ($('retailerInput')) $('retailerInput').value = getCookie(RETAILER_COOKIE);
+  if ($('retailerIdentifierInput')) $('retailerIdentifierInput').value = getCookie(RETAILER_IDENT_COOKIE);
+  if ($('saveRetailer')) $('saveRetailer').onclick = () => {
+    const v = $('retailerInput').value.trim();
+    const id = $('retailerIdentifierInput').value.trim();
+    setCookie(RETAILER_COOKIE, v);
+    setCookie(RETAILER_IDENT_COOKIE, id);
+    $('retailerMsg').innerHTML = '<span class="ok">✓ saved</span>';
+    setTimeout(() => $('retailerMsg').textContent = '', 2500);
+  };
+  if ($('logSearch')) $('logSearch').oninput = renderLog;
+});
+
+// ---------- session bootstrap ----------
+async function refreshSession() {
+  const s = await fetch('/api/session').then(r => r.json()).catch(() => ({ authenticated:false }));
+  if (s.authenticated) showApp(s); else showLogin(s);
+}
+function showLogin(s) {
+  $('loginView').classList.remove('hidden');
+  $('appView').classList.add('hidden');
+  $('userbox').classList.add('hidden');
+  $('topBadge').classList.add('hidden');
+  if (s && s.mockAvailable) $('mockRow').classList.remove('hidden');
+}
+function showApp(s) {
+  $('loginView').classList.add('hidden');
+  $('appView').classList.remove('hidden');
+  const b = $('topBadge'); b.classList.remove('hidden');
+  if (s.mock) { b.textContent = 'Mock mode'; b.className = 'badge mock'; }
+  else { b.textContent = (s.env || '') + ' · live'; b.className = 'badge live'; }
+  const u = $('userbox'); u.classList.remove('hidden');
+  u.innerHTML = `${esc(s.email || '')} &nbsp;·&nbsp; <a id="logoutLink">Sign out</a>`;
+  $('logoutLink').onclick = async () => { await fetch('/api/logout',{method:'POST'}); location.reload(); };
+  loadRegions();
+}
+
+async function loadRegions() {
+  const sel = $('regionSelect');
+  try {
+    const data = await fetch('/api/regions').then(r => r.json());
+    const regions = (data && data.regions) || [];
+    const saved = getCookie(REGION_COOKIE);
+    sel.innerHTML = `<option value="">— Select region —</option>` +
+      regions.map(r => `<option value="${esc(r.id)}" ${r.id===saved?'selected':''}>${esc(r.name || r.short_name || r.id)}</option>`).join('');
+    sel.onchange = () => setCookie(REGION_COOKIE, sel.value);
+  } catch (_) {
+    sel.innerHTML = `<option value="">Could not load regions</option>`;
+  }
+}
+refreshSession();
+
+// ---------- login ----------
+document.querySelectorAll('#envSeg button').forEach(btn => btn.onclick = () => {
+  document.querySelectorAll('#envSeg button').forEach(b => b.classList.remove('on'));
+  btn.classList.add('on'); selectedEnv = btn.dataset.env;
+});
+$('loginBtn').onclick = () => doLogin(false);
+$('mockBtn') && ($('mockBtn').onclick = () => doLogin(true));
+[$('liEmail'),$('liPass')].forEach(el => el.addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(false); }));
+async function doLogin(mock) {
+  $('loginMsg').innerHTML = '<span class="spinner"></span> Signing in…';
+  $('loginBtn').disabled = true;
+  try {
+    const body = mock ? { mock:true, env:selectedEnv }
+      : { clientId:$('liEmail').value.trim(), clientSecret:$('liPass').value, env:selectedEnv };
+    const res = await fetch('/api/login', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Sign-in failed');
+    await refreshSession();
+    $('loginMsg').textContent = '';
+  } catch (err) {
+    $('loginMsg').innerHTML = '<span class="err">' + esc(err.message) + '</span>';
+  } finally { $('loginBtn').disabled = false; }
+}
+
+// ---------- file picking ----------
+const drop = $('drop'), fileInput = $('fileInput');
+drop.onclick = () => fileInput.click();
+fileInput.onchange = () => addFiles(fileInput.files);
+['dragenter','dragover'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.add('drag'); }));
+['dragleave','drop'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.remove('drag'); }));
+drop.addEventListener('drop', ev => addFiles(ev.dataTransfer.files));
+function addFiles(list) {
+  for (const f of list) if (!files.find(x => x.name === f.name && x.size === f.size)) files.push(f);
+  renderFiles();
+}
+function renderFiles() {
+  $('fileList').innerHTML = files.map((f, i) =>
+    `<li><span>${esc(f.name)}</span><span class="muted">${(f.size/1024).toFixed(0)} KB &nbsp; <a href="#" data-rm="${i}" style="color:var(--red)">remove</a></span></li>`
+  ).join('');
+  document.querySelectorAll('[data-rm]').forEach(a => a.onclick = (e) => { e.preventDefault(); files.splice(+a.dataset.rm, 1); renderFiles(); });
+  $('analyzeBtn').disabled = files.length === 0;
+  $('clearBtn').disabled = files.length === 0;
+}
+function hideSteps() { ['createCard','cancelCard','results','logCard'].forEach(id => $(id).classList.add('hidden')); }
+$('clearBtn').onclick = () => { files = []; renderFiles(); hideSteps(); };
+
+// ---------- Step 1: analyze (preview only) ----------
+$('analyzeBtn').onclick = async () => {
+  $('analyzeBtn').disabled = true;
+  $('analyzeMsg').innerHTML = '<span class="spinner"></span> Analyzing…';
+  const fd = new FormData(); files.forEach(f => fd.append('files', f));
+  fd.append('retailerId', currentRetailer());
+  fd.append('retailerIdentifier', currentRetailerIdentifier());
+  fd.append('regionId', currentRegion());
+  try {
+    const res = await fetch('/api/analyze', { method:'POST', body:fd });
+    if (res.status === 401) { showLogin({ mockAvailable:true }); return; }
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Analyze failed');
+    jobId = data.jobId; analyzeData = data;
+    $('createCard').classList.add('hidden');
+    $('cancelCard').classList.add('hidden');
+    $('results').classList.add('hidden');
+    showLog(data.log);
+    if (data.hasDelivery) {
+      showCreateStep(data);            // orders file present → create → cancel → (match if ASN)
+    } else {
+      $('analyzeMsg').innerHTML = '<span class="spinner"></span> Building manifest…';
+      goToMatch();                     // ASN-only → straight to the manifest
+    }
+    if (data.hasDelivery) $('analyzeMsg').textContent = '';
+  } catch (err) {
+    $('analyzeMsg').innerHTML = '<span class="err">' + esc(err.message) + '</span>';
+  } finally { $('analyzeBtn').disabled = false; }
+};
+
+// ---------- Step 2: Orders & status (live PO dashboard) ----------
+let poRows = [], poIndexByRef = new Map(), poFilter = 'all';
+const PO_STATE_LABEL = { matched:'Matched', created:'Created', pending_create:'Pending creation', creating:'Creating…', failed:'Failed', pending_cancel:'Pending cancellation' };
+const PO_FILTERS = [
+  ['all','All', ()=>true],
+  ['matching','Matching orders', r => r.state==='matched'||r.state==='created'],
+  ['pending_create','Pending creation', r => r.state==='pending_create'||r.state==='creating'],
+  ['pending_cancel','Pending cancellation', r => r.state==='pending_cancel'],
+  ['failed','Failed to create', r => r.state==='failed'],
+];
+function poFilterFn(){ return (PO_FILTERS.find(f=>f[0]===poFilter)||PO_FILTERS[0])[2]; }
+const PO_COL = 'max-width:100px;width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+function typeBadge(t){
+  if (t === 'service') return '<span class="state pending_create">Service</span>';
+  if (t === 'pickup') return '<span class="state pending_cancel">Pickup</span>';
+  if (t === 'delivery') return '<span class="state matched">Delivery</span>';
+  return '<span class="muted">—</span>';
+}
+function poCells(r){
+  return `<td style="${PO_COL}" title="${esc(r.po)}">${esc(r.po)}</td>`
+    + `<td>${r.order_id ? esc(r.order_id) : '<span class="muted">—</span>'}</td>`
+    + `<td>${typeBadge(r.type)}</td>`
+    + `<td><span class="state ${r.state}">${PO_STATE_LABEL[r.state]||r.state}</span></td>`
+    + `<td>${esc(r.customer||'')}</td>`
+    + `<td>${esc(r.items)}</td>`
+    + `<td>${esc(r.created_at||'')}</td>`
+    + `<td class="err" style="white-space:normal;max-width:300px;">${esc(r.error||'')}</td>`;
+}
+function rowClass(r){ return r.state==='creating'?'row-creating':(r.state==='failed'?'row-failed':''); }
+function renderPoTable(){
+  const head = `<tr><th style="${PO_COL}">PO #</th><th>Order ID</th><th>Type</th><th>State</th><th>Customer</th><th>Items</th><th>Created At</th><th>Error</th></tr>`;
+  const fn = poFilterFn();
+  const body = poRows.map((r,i)=> fn(r) ? `<tr id="porow-${i}" class="${rowClass(r)}">${poCells(r)}</tr>` : '').join('');
+  $('poTableWrap').innerHTML = `<table>${head}${body || '<tr><td colspan="8" class="muted" style="padding:14px;">No matching rows.</td></tr>'}</table>`;
+}
+function updatePoRow(i){
+  const tr = document.getElementById('porow-'+i);
+  if (!tr) return;
+  tr.className = rowClass(poRows[i]);
+  tr.innerHTML = poCells(poRows[i]);
+}
+function buildPoFilters(){
+  $('poFilters').innerHTML = PO_FILTERS.map(([k,label,fn]) => {
+    const n = poRows.filter(fn).length;
+    return `<span class="chip ${k===poFilter?'on':''}" data-k="${k}">${label} (${n})</span>`;
+  }).join('');
+  document.querySelectorAll('#poFilters .chip').forEach(c => c.onclick = () => {
+    poFilter = c.dataset.k;
+    document.querySelectorAll('#poFilters .chip').forEach(x => x.classList.toggle('on', x.dataset.k===poFilter));
+    renderPoTable();
+  });
+}
+function showCreateStep(d) {
+  $('createCard').classList.remove('hidden');
+  $('createMsg').textContent = '';
+  $('createFailSummary').innerHTML = '';
+  $('fileSummaryLine').innerHTML = (d.fileSummary || [])
+    .map(f => `<span class="pill ${f.type}">${esc(f.type)}</span> ${esc(f.fileName)} — ${f.count} rows`).join('<br>');
+  const c = d.counts || {};
+  poRows = (d.pos || []).map(r => ({ ...r }));
+  poIndexByRef = new Map();
+  poRows.forEach((r,i) => { if (r.state !== 'pending_cancel') poIndexByRef.set(r.po, i); });
+  poFilter = 'all';
+  $('createSummary').innerHTML =
+    `<div class="muted"><b>${c.existing||0}</b> of ${c.deliveryTotal||0} order(s) already exist · `
+    + `<b style="color:var(--warm)">${c.toCreate||0}</b> to create · `
+    + `<b style="color:var(--red)">${c.toCancel||0}</b> not on file (pending cancellation)</div>`;
+  buildPoFilters();
+  renderPoTable();
+  if ((c.toCreate||0) > 0) {
+    $('createCount').textContent = c.toCreate;
+    $('createBtn').classList.remove('hidden'); $('createBtn').disabled = false;
+    $('continueBtn').classList.add('hidden');
+  } else {
+    $('createBtn').classList.add('hidden');
+    $('continueBtn').classList.remove('hidden');
+  }
+  $('createCard').scrollIntoView({ behavior:'smooth', block:'start' });
+}
+$('createBtn').onclick = async () => {
+  $('createBtn').disabled = true;
+  $('createMsg').innerHTML = '<span class="spinner"></span> Preparing…';
+  let refs = [];
+  try {
+    const prep = await fetch('/api/create-prepare', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ jobId }) }).then(r => r.json().then(j => ({ ok:r.ok, j })));
+    if (!prep.ok) throw new Error(prep.j.error || 'Prepare failed');
+    refs = prep.j.refs || [];
+  } catch (err) {
+    $('createMsg').innerHTML = '<span class="err">' + esc(err.message) + '</span>';
+    $('createBtn').disabled = false; return;
+  }
+  // Show progress on the full list
+  poFilter = 'all'; buildPoFilters(); renderPoTable();
+  const created = [];
+  for (const ref of refs) {
+    const i = poIndexByRef.get(ref);
+    if (i != null) { poRows[i].state = 'creating'; updatePoRow(i); }
+    $('createMsg').innerHTML = `<span class="spinner"></span> Creating PO# ${esc(ref)}…`;
+    let res;
+    try {
+      res = await fetch('/api/create-one', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ jobId, ref }) }).then(r => r.json());
+    } catch (err) { res = { ref, ok:false, error: err.message }; }
+    if (i != null) {
+      if (res.ok) { poRows[i].state='created'; poRows[i].order_id=res.order_id; poRows[i].created_at=res.created_at; poRows[i].error=null; }
+      else { poRows[i].state='failed'; poRows[i].error=res.error||'unknown error'; }
+      updatePoRow(i);
+    }
+    created.push(res);
+    addCreateLog([res]);
+  }
+  const failed = created.filter(r => !r.ok).length;
+  $('createMsg').innerHTML = `<span class="ok">✓ ${created.length - failed} created</span>` + (failed ? ` · <span class="err">${failed} failed</span>` : '');
+  $('createFailSummary').innerHTML = failed
+    ? `<div class="warn">⚠ <b>${failed}</b> order(s) failed to create. Use the “Failed to create” filter above to review the errors.</div>` : '';
+  buildPoFilters();
+  $('createBtn').classList.add('hidden');
+  $('continueBtn').classList.remove('hidden');
+};
+$('continueBtn').onclick = () => goToCancel();
+
+// Push created/failed orders (with full JSON payload) into the searchable log.
+function addCreateLog(results) {
+  const entries = results.map(r => ({
+    kind: 'create',
+    text: `Create ${r.ref} → ${r.ok ? ('OK · order_id ' + r.order_id + ' · created_at ' + r.created_at) : ('FAILED · ' + r.error)}` + (r.order ? `  |  payload: ${JSON.stringify(r.order)}` : '')
+  }));
+  logEntries = entries.concat(logEntries);
+  buildLogFilters();
+  renderLog();
+}
+
+// ---------- Step 3: cancel ----------
+function goToCancel() {
+  $('cancelCard').classList.remove('hidden');
+  $('actionMsg').textContent = '';
+  cancelRows = (analyzeData && analyzeData.toCancel) || [];
+  cancelledSet = new Set();
+  $('tabCancel').innerHTML = renderCancelTable();
+  wireCancelSelection();
+  updateCancelCount();
+  $('cancelCard').scrollIntoView({ behavior:'smooth', block:'start' });
+}
+$('cancelBtn').onclick = async () => {
+  const ids = selectedCancelIds();
+  if (!jobId || !ids.length) return;
+  if (!confirm(`Cancel ${ids.length} selected order(s) in Grasshopper? This cannot be undone.`)) return;
+  $('cancelBtn').disabled = true;
+  $('actionMsg').innerHTML = '<span class="spinner"></span> Cancelling…';
+  try {
+    const res = await fetch('/api/confirm-cancel', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ jobId, orderIds: ids }) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Cancel failed');
+    data.results.forEach(r => { if (r.ok) cancelledSet.add(String(r.order_id)); });
+    $('actionMsg').innerHTML = `<span class="ok">✓ ${data.success} cancelled</span>` + (data.failed ? ` · <span class="err">${data.failed} failed</span>` : '');
+    $('tabCancel').innerHTML = renderCancelTable();
+    wireCancelSelection(); updateCancelCount();
+    proceedAfterCancel();
+  } catch (err) {
+    $('actionMsg').innerHTML = '<span class="err">' + esc(err.message) + '</span>';
+    updateCancelCount();
+  }
+};
+$('skipCancelBtn').onclick = () => proceedAfterCancel();
+function proceedAfterCancel() {
+  if (analyzeData && analyzeData.hasAsn) goToMatch();
+  else $('actionMsg').innerHTML = '<span class="ok">✓ Done.</span> No ASN file uploaded, so no manifest was built.';
+}
+
+// ---------- Step 4: match + manifest ----------
+async function goToMatch() {
+  $('actionMsg').innerHTML = '<span class="spinner"></span> Matching SKUs…';
+  try {
+    const res = await fetch('/api/match', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ jobId }) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Match failed');
+    $('actionMsg').innerHTML = '<span class="ok">✓ matching complete</span>';
+    $('analyzeMsg').textContent = '';
+    renderManifest(data);
+    showLog(data.log);
+  } catch (err) {
+    $('analyzeMsg').textContent = '';
+    $('actionMsg').innerHTML = '<span class="err">' + esc(err.message) + '</span>';
+  }
+}
+function renderManifest(d) {
+  $('results').classList.remove('hidden');
+  const s = d.stats;
+  $('stats').innerHTML = `
+    <div class="stat"><div class="n">${s.pendingTotal}</div><div class="l">Pending orders (this retailer)</div></div>
+    <div class="stat"><div class="n">${s.asnSkuCount}</div><div class="l">Inbound SKUs (ASN)</div></div>
+    <div class="stat manifest"><div class="n">${s.manifestLineCount}</div><div class="l">Manifest line items</div></div>
+    <div class="stat manifest"><div class="n">${s.manifestCount}</div><div class="l">Manifest orders</div></div>
+    <div class="stat cancel"><div class="n">${s.toCancelCount}</div><div class="l">Not on file</div></div>`;
+  $('asnSkuList').innerHTML = (d.asnSkus && d.asnSkus.length)
+    ? d.asnSkus.map(sk => `<span class="pill asn" style="margin:2px;display:inline-block;">${esc(sk)}</span>`).join(' ')
+    : '<span class="muted">No SKUs found in ASN files.</span>';
+  $('tabManifest').innerHTML = table(d.manifestLines, ['fifo_seq','ref_order_number','order_id','line_item_id','sku','trailer','fully_fulfilled','items_matched','status_label','created_at']);
+  // default inbound date = today (yyyy-mm-dd for the date picker)
+  if ($('manifestDate') && !$('manifestDate').value) {
+    const t = new Date(); $('manifestDate').value = `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`;
+  }
+  $('manifestMsg').textContent = '';
+  $('createManifestBtn').disabled = !(d.manifestLines && d.manifestLines.length);
+  $('results').scrollIntoView({ behavior:'smooth', block:'start' });
+}
+$('downloadBtn').onclick = () => { if (jobId) window.location = '/api/download/' + jobId; };
+$('createManifestBtn').onclick = async () => {
+  if (!jobId) return;
+  $('createManifestBtn').disabled = true;
+  $('manifestMsg').innerHTML = '<span class="spinner"></span> Creating manifest…';
+  try {
+    const res = await fetch('/api/build-manifest', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ jobId, routeId: $('manifestName').value.trim(), date: $('manifestDate').value }) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Create manifest failed');
+    $('manifestMsg').innerHTML = `<span class="ok">✓ Manifest ${esc(data.manifest_id)} created</span> · ${data.orders} order(s), ${data.line_items} line item(s)` + (data.mock ? ' (mock)' : '');
+    showLog([{ kind:'info', text:`Created inbound manifest ${data.manifest_id} (route_id "${data.route_id}", date ${data.date}) with ${data.orders} order(s) and ${data.line_items} line item(s).` }].concat(logEntries));
+  } catch (err) {
+    $('manifestMsg').innerHTML = '<span class="err">' + esc(err.message) + '</span>';
+    $('createManifestBtn').disabled = false;
+  }
+};
+
+// ---------- To Cancel selectable table ----------
+let cancelRows = [], cancelledSet = new Set();
+function fmtTs(s){ return s ? String(s).replace('T',' ').slice(0,16) : ''; }
+function renderCancelTable() {
+  if (!cancelRows.length) return '<p class="muted" style="padding:14px;">Nothing to cancel — every pending order is on the file.</p>';
+  const refStyle = 'max-width:110px;width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+  const head = `<tr>
+    <th style="width:34px;"><input type="checkbox" id="cbAll" checked></th>
+    <th>Order ID</th>
+    <th style="${refStyle}">Ref Order #</th>
+    <th>Created</th>
+    <th>Customer Name</th>
+    <th>Status</th>
+    <th>Result</th></tr>`;
+  const body = cancelRows.map(r => {
+    const done = cancelledSet.has(String(r.order_id));
+    return `<tr>
+      <td><input type="checkbox" class="cbCancel" value="${esc(r.order_id)}" ${done?'disabled':'checked'}></td>
+      <td>${esc(r.order_id)}</td>
+      <td style="${refStyle}" title="${esc(r.ref_order_number)}">${esc(r.ref_order_number)}</td>
+      <td>${esc(fmtTs(r.created_at))}</td>
+      <td>${esc(r.customer)}</td>
+      <td>${esc(r.status_label)}</td>
+      <td>${done?'<span class="ok">cancelled</span>':''}</td></tr>`;
+  }).join('');
+  return `<table>${head}${body}</table>`;
+}
+function wireCancelSelection() {
+  const all = $('cbAll');
+  if (all) all.onclick = () => { document.querySelectorAll('.cbCancel:not(:disabled)').forEach(c => c.checked = all.checked); updateCancelCount(); };
+  document.querySelectorAll('.cbCancel').forEach(c => c.onchange = updateCancelCount);
+}
+function selectedCancelIds() { return [...document.querySelectorAll('.cbCancel:checked')].map(c => c.value); }
+function updateCancelCount() {
+  const n = selectedCancelIds().length;
+  $('cancelCount').textContent = n;
+  $('cancelBtn').disabled = n === 0;
+}
+
+// ---------- decision log (searchable) ----------
+let logEntries = [], logKind = 'all';
+const LOG_KINDS = [['all','All'],['create','Create'],['cancel','Cancel'],['match','Match'],['skip','Wait'],['asn','Inbound'],['info','Info']];
+function showLog(entries) { logEntries = entries || []; logKind = 'all'; $('logCard').classList.remove('hidden'); buildLogFilters(); renderLog(); }
+function buildLogFilters() {
+  $('logFilters').innerHTML = LOG_KINDS.map(([k,label]) => {
+    const n = k === 'all' ? logEntries.length : logEntries.filter(e => e.kind === k).length;
+    return `<span class="chip ${k===logKind?'on':''}" data-kind="${k}">${label} (${n})</span>`;
+  }).join('');
+  document.querySelectorAll('#logFilters .chip').forEach(c => c.onclick = () => {
+    logKind = c.dataset.kind;
+    document.querySelectorAll('#logFilters .chip').forEach(x => x.classList.toggle('on', x.dataset.kind === logKind));
+    renderLog();
+  });
+}
+function highlight(text, q) {
+  const safe = esc(text);
+  if (!q) return safe;
+  const i = text.toLowerCase().indexOf(q);
+  if (i < 0) return safe;
+  return esc(text.slice(0,i)) + '<mark>' + esc(text.slice(i, i+q.length)) + '</mark>' + esc(text.slice(i+q.length));
+}
+function renderLog() {
+  if (!$('logSearch')) return;
+  const q = ($('logSearch').value || '').trim().toLowerCase();
+  const rows = logEntries.filter(e => (logKind === 'all' || e.kind === logKind) && (!q || e.text.toLowerCase().includes(q)));
+  $('logList').innerHTML = rows.length
+    ? rows.map(e => `<div><span class="logtag ${e.kind}">${e.kind === 'skip' ? 'wait' : e.kind}</span>${highlight(e.text, q)}</div>`).join('')
+    : '<span class="muted">No matching log lines.</span>';
+  $('logCount').textContent = `${rows.length} of ${logEntries.length} lines`;
+}
+
+function table(rows, cols) {
+  if (!rows || !rows.length) return '<p class="muted" style="padding:14px;">None.</p>';
+  const head = '<tr>' + cols.map(c => `<th>${esc(c.replace(/_/g,' '))}</th>`).join('') + '</tr>';
+  const body = rows.map(r => '<tr>' + cols.map(c => `<td>${esc(r[c])}</td>`).join('') + '</tr>').join('');
+  return `<table>${head}${body}</table>`;
+}
+</script>
+</body>
+</html>
