@@ -79,14 +79,24 @@ function reconcile(pendingOrders, delivery, asn) {
     return pickupKeys.has(k) && !deliverableKeys.has(k);
   };
 
+  // Only line items in status 1 (Pending Arrival) or 2 (Pending Pickup) are
+  // eligible for matching. If a line item carries no status (field absent),
+  // keep it eligible so a missing field doesn't silently empty the manifest.
+  const isMatchableStatus = (li) => {
+    if (li.status === null || li.status === undefined || li.status === '') return true;
+    const n = Number(li.status);
+    return n === STATUS.PENDING_ARRIVAL || n === STATUS.PENDING_PICKUP;
+  };
+
   // 4. Manifest = pending orders that (a) survive (are on the delivery file,
   //    i.e. not in the cancel list) AND (b) have a deliverable line item whose
   //    product SKU is arriving on an inbound trailer. Sorted oldest-first (FIFO).
   const manifest = pendingOrders
     .filter((o) => !toCancelIds.has(o.order_id))
     .map((o) => {
-      // Line items we actually try to fulfill (exclude pickup-only entries).
-      const fulfillable = (o.line_items || []).filter((li) => !isPickupOnly(o, li));
+      // Line items we actually try to fulfill: not pickup-only, and in a
+      // matchable status (1/2).
+      const fulfillable = (o.line_items || []).filter((li) => !isPickupOnly(o, li) && isMatchableStatus(li));
       const matchedItems = fulfillable
         .filter((li) => asnSkus.has(normSku(li.sku)))
         .map((li) => ({

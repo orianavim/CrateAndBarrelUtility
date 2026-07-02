@@ -289,6 +289,7 @@ function normalizeOrder(o) {
       sku: (li.sku || '').toString().trim(),
       name: li.name,
       quantity: li.quantity,
+      status: li.status ?? li.state ?? null,
     })),
     skus: lineItems.map((li) => (li.sku || '').toString().trim()).filter(Boolean),
     raw: o,

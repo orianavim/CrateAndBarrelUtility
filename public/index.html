@@ -134,10 +134,9 @@
       <h2 class="serif">Sign in to continue</h2>
       <p class="lead">Authenticate with your Grasshopper Labs credentials to access the manifest utility.</p>
 
-      <label>Environment</label>
-      <div class="seg" id="envSeg">
-        <button type="button" data-env="staging" class="on">Staging</button>
-        <button type="button" data-env="production">Production</button>
+      <div id="envRow" class="hidden">
+        <label>Environment</label>
+        <div class="seg" id="envSeg"></div>
       </div>
 
       <label>Client ID</label>
@@ -271,7 +270,7 @@
 </footer>
 
 <script>
-let files = [], jobId = null, selectedEnv = 'staging', analyzeData = null;
+let files = [], jobId = null, selectedEnv = 'production', analyzeData = null;
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
@@ -314,6 +313,22 @@ function showLogin(s) {
   $('userbox').classList.add('hidden');
   $('topBadge').classList.add('hidden');
   if (s && s.mockAvailable) $('mockRow').classList.remove('hidden');
+  renderEnvs(s || {});
+}
+// Build the environment picker from what the server offers. In production the
+// server exposes a single environment, so the picker is hidden entirely.
+function renderEnvs(s) {
+  const envs = (s.envs && s.envs.length) ? s.envs : ['production'];
+  selectedEnv = s.defaultEnv && envs.includes(s.defaultEnv) ? s.defaultEnv : envs[0];
+  const label = { staging: 'Staging', production: 'Production' };
+  $('envSeg').innerHTML = envs.map(e =>
+    `<button type="button" data-env="${e}" class="${e===selectedEnv?'on':''}">${label[e]||e}</button>`
+  ).join('');
+  $('envRow').classList.toggle('hidden', envs.length < 2);
+  document.querySelectorAll('#envSeg button').forEach(btn => btn.onclick = () => {
+    document.querySelectorAll('#envSeg button').forEach(b => b.classList.remove('on'));
+    btn.classList.add('on'); selectedEnv = btn.dataset.env;
+  });
 }
 function showApp(s) {
   $('loginView').classList.add('hidden');
@@ -343,10 +358,6 @@ async function loadRegions() {
 refreshSession();
 
 // ---------- login ----------
-document.querySelectorAll('#envSeg button').forEach(btn => btn.onclick = () => {
-  document.querySelectorAll('#envSeg button').forEach(b => b.classList.remove('on'));
-  btn.classList.add('on'); selectedEnv = btn.dataset.env;
-});
 $('loginBtn').onclick = () => doLogin(false);
 $('mockBtn') && ($('mockBtn').onclick = () => doLogin(true));
 [$('liEmail'),$('liPass')].forEach(el => el.addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(false); }));
@@ -369,7 +380,7 @@ async function doLogin(mock) {
 // ---------- file picking ----------
 const drop = $('drop'), fileInput = $('fileInput');
 drop.onclick = () => fileInput.click();
-fileInput.onchange = () => addFiles(fileInput.files);
+fileInput.onchange = () => { addFiles(fileInput.files); fileInput.value = ''; };
 ['dragenter','dragover'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.add('drag'); }));
 ['dragleave','drop'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.remove('drag'); }));
 drop.addEventListener('drop', ev => addFiles(ev.dataTransfer.files));
@@ -386,7 +397,7 @@ function renderFiles() {
   $('clearBtn').disabled = files.length === 0;
 }
 function hideSteps() { ['createCard','cancelCard','results','logCard'].forEach(id => $(id).classList.add('hidden')); }
-$('clearBtn').onclick = () => { files = []; renderFiles(); hideSteps(); };
+$('clearBtn').onclick = () => { files = []; fileInput.value = ''; renderFiles(); hideSteps(); };
 
 // ---------- Step 1: analyze (preview only) ----------
 $('analyzeBtn').onclick = async () => {
@@ -615,6 +626,8 @@ function renderManifest(d) {
     ? d.asnSkus.map(sk => `<span class="pill asn" style="margin:2px;display:inline-block;">${esc(sk)}</span>`).join(' ')
     : '<span class="muted">No SKUs found in ASN files.</span>';
   $('tabManifest').innerHTML = table(d.manifestLines, ['fifo_seq','ref_order_number','order_id','line_item_id','sku','trailer','fully_fulfilled','items_matched','status_label','created_at']);
+  // Auto-generated manifest name from the ASN trailer ids (editable).
+  if (d.manifestName) $('manifestName').value = d.manifestName;
   // default inbound date = today (yyyy-mm-dd for the date picker)
   if ($('manifestDate') && !$('manifestDate').value) {
     const t = new Date(); $('manifestDate').value = `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`;
