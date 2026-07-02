@@ -1,0 +1,11 @@
+# Replace BOTH placeholders below, then save.
+#   1. your email  -> used by Let's Encrypt for expiry notices
+#   2. your domain -> the exact hostname you pointed at this server
+
+{
+    email you@example.com
+}
+
+crateparser.example.com {
+    reverse_proxy app:3000
+}

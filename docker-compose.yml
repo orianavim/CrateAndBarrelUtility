@@ -1,0 +1,26 @@
+# CrateParser production stack: the Node app + Caddy (automatic HTTPS).
+# Caddy terminates TLS on 80/443 and reverse-proxies to the app on :3000.
+services:
+  app:
+    build: .
+    restart: always
+    env_file: .env
+    expose:
+      - "3000"          # internal only; never published to the host
+
+  caddy:
+    image: caddy:2
+    restart: always
+    ports:
+      - "80:80"         # needed for the Let's Encrypt HTTP challenge + redirect
+      - "443:443"       # HTTPS
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data      # persists issued certificates across restarts
+      - caddy_config:/config
+    depends_on:
+      - app
+
+volumes:
+  caddy_data:
+  caddy_config:
