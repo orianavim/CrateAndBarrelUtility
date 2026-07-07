@@ -10,6 +10,16 @@ function num(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+// Per-line-item serial_number: "OP: <Open Instruction>; ASSMBL:<Assembly
+// Instruction>", left-padded to 25 chars with an invisible zero-width space so
+// short values still reach a 25-char minimum width without showing padding.
+const SERIAL_PAD = '\u200B'; // zero-width space (invisible)
+function buildSerialNumber(row) {
+  const r = row || {};
+  const content = `OP: ${s(r['Open Instruction'])}; ASSMBL:${s(r['Assembly Instruction'])}`;
+  return content.padStart(25, SERIAL_PAD);
+}
+
 // Normalize a zip to the 5-digit standard (same as regular orders): keep digits
 // only, take the first 5 (drops ZIP+4), left-pad short zips to restore a leading
 // zero. "80209-1234" -> "80209", "8209" -> "08209".
@@ -126,6 +136,7 @@ function buildServiceTicket(rows, opts = {}) {
         quantity: 1,
         vendor: opts.vendor || 'Crate and Barrel',
         freight_info: { is_fob: true },
+        serial_number: buildSerialNumber(first),
       },
     ],
     note: s(first['Order Note 1']),
@@ -134,4 +145,4 @@ function buildServiceTicket(rows, opts = {}) {
   return order;
 }
 
-module.exports = { buildOrders, buildServiceTicket, splitName };
+module.exports = { buildOrders, buildServiceTicket, buildSerialNumber, splitName };

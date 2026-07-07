@@ -6,12 +6,12 @@ const express = require('express');
 const multer = require('multer');
 
 const config = require('./config');
-const { parseBatch, deliveryOrderRef, asnTrailerId } = require('./parser');
+const { parseBatch, deliveryOrderRef, asnTrailerId, normSku } = require('./parser');
 const { GrasshopperClient, MockGrasshopperClient } = require('./grasshopper');
 const { reconcile, orderToRow } = require('./reconcile');
 const { buildWorkbook } = require('./excel');
 const { buildImportBuffer } = require('./importfile');
-const { buildServiceTicket, splitName } = require('./orderbuilder');
+const { buildServiceTicket, buildSerialNumber, splitName } = require('./orderbuilder');
 
 const app = express();
 app.use(express.json());
@@ -420,6 +420,43 @@ app.post('/api/create-one', requireAuth, async (req, res) => {
     payload.freight_info.vendor_info = payload.freight_info.vendor_info || {};
     payload.freight_info.vendor_info.first_name = nm.first_name;
     payload.freight_info.vendor_info.last_name = nm.last_name;
+  }
+
+  // CPU (customer pickup / will-call) orders. The Ship-To can be a warehouse
+  // placeholder that hides the real customer in the Directions columns.
+  if (fileSL === 'CPU' && !isReturn) {
+    const dRow = (job.parsed.delivery || []).find((rec) => (deliveryOrderRef(rec) || '').trim() === ref) || {};
+    payload.customer = payload.customer || {};
+    // If the Ship-To is the "PICKUP*WAREHOUSE" placeholder, the real customer
+    // name lives in the Directions1 column (col AA).
+    if (String(dRow['Ship To Cust Name'] || '').trim().toUpperCase() === 'PICKUP*WAREHOUSE') {
+      const nm = splitName(dRow['Directions1']);
+      payload.customer.first_name = nm.first_name;
+      payload.customer.last_name = nm.last_name;
+    }
+    // Phone: prefer Phone1 Num, else Directions2 (e.g. "Day:3039378679").
+    // Strip everything that isn't a digit.
+    const onlyDigits = (v) => String(v === undefined || v === null ? '' : v).replace(/\D/g, '');
+    const phone = onlyDigits(dRow['Phone1 Num']) || onlyDigits(dRow['Directions2']);
+    if (phone) payload.customer.phone1 = { number: phone };
+  }
+
+  // Per-line-item serial_number = OP + assembly instructions from the matching
+  // delivery row. Match each line item to a delivery row by SKU (a queue per SKU
+  // handles duplicate SKUs on the same order); fall back to the first row.
+  {
+    const rows = (job.parsed.delivery || []).filter((rec) => (deliveryOrderRef(rec) || '').trim() === ref);
+    const bySku = new Map();
+    for (const r of rows) {
+      const k = normSku(r['Sku']);
+      if (!bySku.has(k)) bySku.set(k, []);
+      bySku.get(k).push(r);
+    }
+    for (const li of payload.line_items || []) {
+      const q = bySku.get(normSku(li.sku));
+      const row = q && q.length ? q.shift() : rows[0] || {};
+      li.serial_number = buildSerialNumber(row);
+    }
   }
 
   try {
