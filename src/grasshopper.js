@@ -10,6 +10,20 @@ const STATUS = {
 };
 const PENDING_STATUSES = [STATUS.PENDING_ARRIVAL, STATUS.PENDING_PICKUP];
 
+// TERMINAL statuses: an existing order in one of these is considered "done", so
+// a PO on the delivery file that only matches a terminal order is RE-CREATED
+// (assumes a split ship: another order for the same PO shipped to the customer).
+// 6 = Cancelled is known. Add the numeric codes for Delivered, Rejected,
+// Damaged, Delivery Failed and Customer Pickup here once confirmed.
+const TERMINAL_STATUSES = new Set([
+  STATUS.CANCELLED, // 6
+  // TODO(codes): delivered, rejected, damaged, delivery-failed, customer-pickup
+]);
+function isTerminalStatus(order) {
+  const n = Number(order && order.status);
+  return Number.isFinite(n) && TERMINAL_STATUSES.has(n);
+}
+
 // ---------------------------------------------------------------------------
 // Real client - talks to the Grasshopper Labs REST API.
 // ---------------------------------------------------------------------------
@@ -150,9 +164,11 @@ class GrasshopperClient {
           const rows = Array.isArray(body.data) ? body.data : [];
           // The list filter is unreliable, so verify the ref matches ourselves.
           const matches = rows.filter((o) => String(o.ref_order_number || '').trim() === ref);
-          // A CANCELLED order (status 6) does NOT count as existing — it must be
-          // re-created. Only a live (non-cancelled) order means "already exists".
-          const live = matches.find((o) => Number(o.status) !== STATUS.CANCELLED);
+          // An order in a TERMINAL status (cancelled, delivered, rejected,
+          // damaged, delivery failed, customer pickup) does NOT count as
+          // existing — it must be re-created (split-ship assumption). Only a
+          // live (non-terminal) order means "already exists".
+          const live = matches.find((o) => !isTerminalStatus(o));
           return live ? { ref, order_id: live.order_id || live.id } : null;
         })
       );

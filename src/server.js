@@ -6,7 +6,7 @@ const express = require('express');
 const multer = require('multer');
 
 const config = require('./config');
-const { parseBatch, deliveryOrderRef, asnTrailerId, normSku } = require('./parser');
+const { parseBatch, deliveryOrderRef, asnTrailerId, normSku, classifyItemNote } = require('./parser');
 const { GrasshopperClient, MockGrasshopperClient } = require('./grasshopper');
 const { reconcile, orderToRow } = require('./reconcile');
 const { buildWorkbook } = require('./excel');
@@ -147,6 +147,29 @@ function fmtDate(v) {
   return m ? m[1] : s;
 }
 
+// Segment order for display/creation.
+const SEGMENT_ORDER = ['delivery', 'pickup', 'service'];
+
+// Group a PO's delivery rows into segments by per-row Item Note classification.
+// Returns { present: [seg,...] in stable order, rowsBySeg: { seg: [rows] } }.
+// A PO with both PICKUP and non-PICKUP rows yields two segments → two orders.
+function segmentize(rows) {
+  const rowsBySeg = {};
+  for (const r of rows || []) {
+    const seg = classifyItemNote(r['Item Note']);
+    (rowsBySeg[seg] = rowsBySeg[seg] || []).push(r);
+  }
+  const present = SEGMENT_ORDER.filter((s) => rowsBySeg[s] && rowsBySeg[s].length);
+  return { present, rowsBySeg };
+}
+
+// Rows of one PO belonging to one segment.
+function segmentRows(delivery, ref, segment) {
+  return (delivery || []).filter(
+    (rec) => (deliveryOrderRef(rec) || '').trim() === ref && classifyItemNote(rec['Item Note']) === segment
+  );
+}
+
 // Manifest name: "C&B - Inbound - <unique Trailer Ids from the ASN file>".
 function manifestNameFromAsn(asn) {
   const trailers = [...new Set((asn || []).map(asnTrailerId).filter(Boolean))];
@@ -202,31 +225,43 @@ app.post('/api/analyze', requireAuth, upload.array('files'), async (req, res) =>
     // or pending creation) plus the to-cancel orders.
     const serviceLevelByRef = {};
     const typeByRef = {};
+    const segTypesByRef = {};
     const pos = [];
+    let toCreateUnits = 0;
     for (const ref of deliveryRefs) {
       const rows = rowsByRef.get(ref) || [];
       const first = rows[0] || {};
       serviceLevelByRef[ref] = String(first['Service Level'] || '').trim().toUpperCase();
-      // Classify the PO from the "Item Note" column. Precedence:
+      // Per-row classification: a PO can mix segments (some PICKUP rows, some
+      // delivery). Each present segment becomes its own order.
       //   service ("SRV REQ") → type 4 service ticket
       //   pickup  ("PICKUP")  → type 2 return order
-      //   otherwise           → type 1 delivery
-      const isService = rows.some((r) => /srv\s*req/i.test(String(r['Item Note'] || '')));
-      const isPickup = rows.some((r) => /pickup/i.test(String(r['Item Note'] || '')));
-      const type = isService ? 'service' : isPickup ? 'pickup' : 'delivery';
-      typeByRef[ref] = type;
-      const base = {
+      //   delivery            → type 1 delivery
+      const { present, rowsBySeg } = segmentize(rows);
+      segTypesByRef[ref] = present;
+      // Representative type for a single matched row (precedence service>pickup>delivery).
+      const repType = present[present.length - 1] || 'delivery';
+      typeByRef[ref] = repType;
+      const baseOf = (type, itemCount) => ({
         po: ref,
         customer: String(first['Ship To Cust Name'] || '').trim(),
-        items: rows.length,
+        items: itemCount,
         type,
         delivery_date: fmtDate(first['Delivery Date']),
         error: null,
         created_at: null,
-      };
-      if (pendingByRef.has(ref)) pos.push({ ...base, order_id: pendingByRef.get(ref).order_id, state: 'matched' });
-      else if (foundMap.has(ref)) pos.push({ ...base, order_id: foundMap.get(ref), state: 'matched' });
-      else pos.push({ ...base, order_id: null, state: 'pending_create' });
+      });
+      if (pendingByRef.has(ref)) {
+        pos.push({ ...baseOf(repType, rows.length), order_id: pendingByRef.get(ref).order_id, state: 'matched' });
+      } else if (foundMap.has(ref)) {
+        pos.push({ ...baseOf(repType, rows.length), order_id: foundMap.get(ref), state: 'matched' });
+      } else {
+        // Pending creation: one row per segment so a split PO shows two orders.
+        for (const seg of present) {
+          pos.push({ ...baseOf(seg, rowsBySeg[seg].length), segment: seg, order_id: null, state: 'pending_create' });
+          toCreateUnits += 1;
+        }
+      }
     }
 
     // To-cancel: pending orders not on today's delivery file — only when a
@@ -256,11 +291,13 @@ app.post('/api/analyze', requireAuth, upload.array('files'), async (req, res) =>
       region: null,
       serviceLevelByRef,
       typeByRef,
+      segTypesByRef,
       toCreateRefs,
       toCancel: toCancelRows,
       parsedByRef: null,
+      parsedByUnit: {},
       cancelStatusById: {},
-      counts: { deliveryTotal: deliveryRefs.length, existing: existingCount, toCreate: toCreateRefs.length, toCancel: toCancelRows.length },
+      counts: { deliveryTotal: deliveryRefs.length, existing: existingCount, toCreate: toCreateUnits, toCancel: toCancelRows.length },
       created: { count: 0, failed: 0, results: [] },
       result: null,
     };
@@ -270,7 +307,7 @@ app.post('/api/analyze', requireAuth, upload.array('files'), async (req, res) =>
     if (hasDelivery) {
       log.push({
         kind: 'info',
-        text: `Delivery file has ${deliveryRefs.length} order(s): ${existingCount} already exist in Grasshopper, ${toCreateRefs.length} need to be created. ${toCancelRows.length} pending order(s) are not on the file.`,
+        text: `Delivery file has ${deliveryRefs.length} PO(s): ${existingCount} already exist in Grasshopper, ${toCreateUnits} order(s) to create. ${toCancelRows.length} pending order(s) are not on the file.`,
       });
     } else {
       log.push({ kind: 'info', text: 'No delivery file uploaded — skipping order creation and cancellation; building the manifest only.' });
@@ -316,10 +353,31 @@ app.post('/api/create-prepare', requireAuth, async (req, res) => {
     const parsedOrders = await job.client.importOrders(buf);
     job.parsedByRef = new Map(parsedOrders.map((o) => [(o.ref_order_number || '').trim(), o]));
 
-    // If any order to create is a RETURN (pickup → type 2), we need the selected
-    // Region's address as the return destination. Base this on our own file
-    // classification, not the import's type (it mis-maps SRV REQ to type 2).
-    const hasReturn = job.toCreateRefs.some((r) => job.typeByRef && job.typeByRef[r] === 'pickup');
+    // Build the per-unit parsed orders (unit = ref + segment). Single-segment,
+    // non-service POs reuse the bulk import. Multi-segment POs (e.g. a PO with
+    // both PICKUP and delivery rows) are re-imported per segment so each order is
+    // cleanly mapped (a pickup segment → a return, a delivery segment → a
+    // delivery). Service segments are built at create time, not imported.
+    job.parsedByUnit = {};
+    for (const ref of job.toCreateRefs) {
+      const segs = (job.segTypesByRef && job.segTypesByRef[ref]) || [];
+      const nonService = segs.filter((s) => s !== 'service');
+      const single = segs.length === 1;
+      for (const seg of nonService) {
+        const uid = ref + '::' + seg;
+        if (single) {
+          job.parsedByUnit[uid] = job.parsedByRef.get(ref) || null;
+        } else {
+          const segBuf = buildImportBuffer(job.deliveryBuffers, new Set([ref]), { keepSegment: seg });
+          const arr = segBuf ? await job.client.importOrders(segBuf) : [];
+          job.parsedByUnit[uid] = arr[0] || null;
+        }
+      }
+    }
+
+    // If any order to create is a RETURN (pickup segment → type 2), we need the
+    // selected Region's address as the return destination.
+    const hasReturn = job.toCreateRefs.some((r) => (job.segTypesByRef[r] || []).includes('pickup'));
     if (hasReturn) {
       if (!job.regionId) {
         return res.status(400).json({ error: 'This file has pickups (return orders). Select a Region in the Account section first — its address is used as the return destination.' });
@@ -345,55 +403,63 @@ app.post('/api/create-one', requireAuth, async (req, res) => {
   const ref = String(req.body.ref || '');
   job.created = job.created || { count: 0, failed: 0, results: [] };
 
-  if (job.mock) {
-    const o = job.client.mockCreateRef(ref);
-    const row = { ref, ok: true, order_id: o ? o.order_id : 'MOCK-' + ref, created_at: new Date().toISOString(), error: null };
-    job.created.count += 1;
+  // Which segment of this PO to create. A PO with mixed PICKUP + delivery rows
+  // produces two units; the client sends the segment per row. Default to the
+  // PO's representative segment for single-segment POs / older clients.
+  const segs = (job.segTypesByRef && job.segTypesByRef[ref]) || [];
+  let segment = String(req.body.segment || '').trim();
+  if (!segment) segment = segs.length ? segs[segs.length - 1] : (job.typeByRef && job.typeByRef[ref]) || 'delivery';
+
+  const finish = (ok, extra) => {
+    const row = { ref, segment, ok, ...extra };
+    if (ok) job.created.count += 1;
+    else job.created.failed += 1;
     job.created.results.push(row);
     return res.json(row);
+  };
+
+  if (job.mock) {
+    const o = job.client.mockCreateRef(ref);
+    return finish(true, { order_id: o ? o.order_id : 'MOCK-' + ref, created_at: new Date().toISOString(), error: null });
   }
 
   // Service level: map the file's Service Level code (LOC->wg, CPU->willcall).
   const fileSL = (job.serviceLevelByRef && job.serviceLevelByRef[ref]) || '';
   const mappedSL = SERVICE_LEVEL_MAP[fileSL] || 'wg';
 
-  // SERVICE TICKETS (type 4). The import endpoint mis-maps "SRV REQ" rows to a
-  // type-2 return with split line items, so we build the ticket from the
-  // delivery file directly: one line item, name = all Sku Descriptions joined
-  // with ", ", sku = all Skus joined with ", ", category type 1.
+  // Rows of THIS segment only (so a split PO builds each order from its own rows).
+  const segRows = segmentRows(job.parsed.delivery, ref, segment);
+
   let payload;
-  if (job.typeByRef && job.typeByRef[ref] === 'service') {
-    const rows = (job.parsed.delivery || []).filter((rec) => (deliveryOrderRef(rec) || '').trim() === ref);
-    if (!rows.length) return res.json({ ref, ok: false, error: 'No delivery rows for this service ticket.' });
-    payload = buildServiceTicket(rows, { retailerIdentifier: job.retailerIdentifier, serviceLevel: mappedSL });
+  // SERVICE TICKETS (type 4). Built from the delivery file directly: one line
+  // item, name = all Sku Descriptions joined ", ", sku = all Skus joined ", ",
+  // category 1.
+  if (segment === 'service') {
+    if (!segRows.length) return finish(false, { order_id: null, created_at: null, error: 'No delivery rows for this service ticket.' });
+    payload = buildServiceTicket(segRows, { retailerIdentifier: job.retailerIdentifier, serviceLevel: mappedSL });
     try {
       const resp = await job.client.createOrder(payload);
       const o = (resp && (resp.data || resp)) || {};
-      const row = { ref, ok: true, order_id: o.order_id || o.id || null, created_at: o.created_at || null, error: null, order: payload };
-      job.created.count += 1;
-      job.created.results.push(row);
-      return res.json(row);
+      return finish(true, { order_id: o.order_id || o.id || null, created_at: o.created_at || null, error: null, order: payload });
     } catch (err) {
-      const row = { ref, ok: false, order_id: null, created_at: null, error: err.message, order: payload };
-      job.created.failed += 1;
-      job.created.results.push(row);
-      return res.json(row);
+      return finish(false, { order_id: null, created_at: null, error: err.message, order: payload });
     }
   }
 
-  const parsed = job.parsedByRef && job.parsedByRef.get(ref);
-  if (!parsed) return res.json({ ref, ok: false, error: 'No parsed order for this PO (run prepare first).' });
+  const parsed = (job.parsedByUnit && job.parsedByUnit[ref + '::' + segment]) || (job.parsedByRef && job.parsedByRef.get(ref));
+  if (!parsed) return finish(false, { order_id: null, created_at: null, error: 'No parsed order for this PO segment (run prepare first).' });
   payload = { ...parsed, retailer: { identifier: job.retailerIdentifier } };
   delete payload._id;
   delete payload.status;
   if (SERVICE_LEVEL_MAP[fileSL]) payload.service_level = SERVICE_LEVEL_MAP[fileSL];
 
-  // Return orders (type 2 / pickup): the file's Ship-To already became the pickup
+  // Return orders (pickup segment → type 2): the Ship-To became the pickup
   // location; fill the destination (customer) with the selected Region's address.
-  const isReturn = String(payload.type) === '2';
+  const isReturn = segment === 'pickup' || String(payload.type) === '2';
   if (isReturn) {
+    payload.type = 2;
     if (!job.region || !job.region.address) {
-      return res.json({ ref, ok: false, error: 'No Region selected for return destination.' });
+      return finish(false, { order_id: null, created_at: null, error: 'No Region selected for return destination.' });
     }
     const a = job.region.address;
     const ci = job.region.contact_info || {};
@@ -412,9 +478,8 @@ app.post('/api/create-one', requireAuth, async (req, res) => {
     if (!payload.customer.email) payload.customer.email = ci.email || 'returns@grasshopperlabs.io';
 
     // Split the original Ship-To name (the pickup person) into the pickup
-    // vendor_info first/last name fields. Pull it from the delivery file, which
-    // is authoritative ("LAST*FIRST" format handled by splitName).
-    const dRow = (job.parsed.delivery || []).find((rec) => (deliveryOrderRef(rec) || '').trim() === ref);
+    // vendor_info first/last name fields, from this segment's rows.
+    const dRow = segRows[0];
     const nm = splitName(dRow && dRow['Ship To Cust Name']);
     payload.freight_info = payload.freight_info || {};
     payload.freight_info.vendor_info = payload.freight_info.vendor_info || {};
@@ -425,36 +490,31 @@ app.post('/api/create-one', requireAuth, async (req, res) => {
   // CPU (customer pickup / will-call) orders. The Ship-To can be a warehouse
   // placeholder that hides the real customer in the Directions columns.
   if (fileSL === 'CPU' && !isReturn) {
-    const dRow = (job.parsed.delivery || []).find((rec) => (deliveryOrderRef(rec) || '').trim() === ref) || {};
+    const dRow = segRows[0] || {};
     payload.customer = payload.customer || {};
-    // If the Ship-To is the "PICKUP*WAREHOUSE" placeholder, the real customer
-    // name lives in the Directions1 column (col AA).
     if (String(dRow['Ship To Cust Name'] || '').trim().toUpperCase() === 'PICKUP*WAREHOUSE') {
       const nm = splitName(dRow['Directions1']);
       payload.customer.first_name = nm.first_name;
       payload.customer.last_name = nm.last_name;
     }
-    // Phone: prefer Phone1 Num, else Directions2 (e.g. "Day:3039378679").
-    // Strip everything that isn't a digit.
+    // Phone: prefer Phone1 Num, else Directions2 (e.g. "Day:3039378679"). Digits only.
     const onlyDigits = (v) => String(v === undefined || v === null ? '' : v).replace(/\D/g, '');
     const phone = onlyDigits(dRow['Phone1 Num']) || onlyDigits(dRow['Directions2']);
     if (phone) payload.customer.phone1 = { number: phone };
   }
 
   // Per-line-item serial_number = OP + assembly instructions from the matching
-  // delivery row. Match each line item to a delivery row by SKU (a queue per SKU
-  // handles duplicate SKUs on the same order); fall back to the first row.
+  // delivery row (matched by SKU within this segment; fall back to the first row).
   {
-    const rows = (job.parsed.delivery || []).filter((rec) => (deliveryOrderRef(rec) || '').trim() === ref);
     const bySku = new Map();
-    for (const r of rows) {
+    for (const r of segRows) {
       const k = normSku(r['Sku']);
       if (!bySku.has(k)) bySku.set(k, []);
       bySku.get(k).push(r);
     }
     for (const li of payload.line_items || []) {
       const q = bySku.get(normSku(li.sku));
-      const row = q && q.length ? q.shift() : rows[0] || {};
+      const row = q && q.length ? q.shift() : segRows[0] || {};
       li.serial_number = buildSerialNumber(row);
     }
   }
@@ -462,15 +522,9 @@ app.post('/api/create-one', requireAuth, async (req, res) => {
   try {
     const resp = await job.client.createOrder(payload);
     const o = (resp && (resp.data || resp)) || {};
-    const row = { ref, ok: true, order_id: o.order_id || o.id || null, created_at: o.created_at || null, error: null, order: payload };
-    job.created.count += 1;
-    job.created.results.push(row);
-    res.json(row);
+    return finish(true, { order_id: o.order_id || o.id || null, created_at: o.created_at || null, error: null, order: payload });
   } catch (err) {
-    const row = { ref, ok: false, order_id: null, created_at: null, error: err.message, order: payload };
-    job.created.failed += 1;
-    job.created.results.push(row);
-    res.json(row);
+    return finish(false, { order_id: null, created_at: null, error: err.message, order: payload });
   }
 });
 

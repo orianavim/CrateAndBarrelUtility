@@ -1,6 +1,7 @@
 'use strict';
 
 const XLSX = require('xlsx');
+const { classifyItemNote } = require('./parser');
 
 function norm(v) {
   return String(v === undefined || v === null ? '' : v).trim();
@@ -17,8 +18,12 @@ function norm(v) {
 //
 // @param deliveryBuffers  array of raw delivery file Buffers
 // @param missingRefSet    Set of trimmed Sales# values to include
+// @param opts.keepSegment optional 'delivery'|'pickup'|'service' — when set, only
+//        rows whose Item Note classifies to that segment are kept. Used to split
+//        a single PO that mixes pickup and delivery rows into separate orders.
 // @returns Buffer | null  (null if there is nothing to import)
-function buildImportBuffer(deliveryBuffers, missingRefSet) {
+function buildImportBuffer(deliveryBuffers, missingRefSet, opts = {}) {
+  const keepSegment = opts.keepSegment || null;
   let header = null;
   const dataRows = [];
 
@@ -38,10 +43,13 @@ function buildImportBuffer(deliveryBuffers, missingRefSet) {
     if (!header) header = rows[hIdx];
 
     const salesIdx = rows[hIdx].findIndex((c) => norm(c) === 'Sales#');
+    const noteIdx = rows[hIdx].findIndex((c) => norm(c) === 'Item Note');
     for (let i = hIdx + 1; i < rows.length; i++) {
       const r = rows[i];
       if (!r || r.every((c) => norm(c) === '')) continue;
-      if (missingRefSet.has(norm(r[salesIdx]))) dataRows.push(r);
+      if (!missingRefSet.has(norm(r[salesIdx]))) continue;
+      if (keepSegment && classifyItemNote(noteIdx >= 0 ? r[noteIdx] : '') !== keepSegment) continue;
+      dataRows.push(r);
     }
   }
 

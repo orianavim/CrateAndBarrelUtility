@@ -175,6 +175,16 @@ function asnSku(rec) {
   return normSku(rec['Sku']);
 }
 
+// Classify a single delivery row from its "Item Note" value. Precedence:
+//   service ("SRV REQ") > pickup ("PICKUP") > delivery (anything else).
+// This is per-ROW, so one PO can contain rows of different segments.
+function classifyItemNote(note) {
+  const n = String(note === undefined || note === null ? '' : note);
+  if (/srv\s*req/i.test(n)) return 'service';
+  if (/pickup/i.test(n)) return 'pickup';
+  return 'delivery';
+}
+
 module.exports = {
   parseFile,
   parseBatch,
@@ -185,6 +195,7 @@ module.exports = {
   asnTrailerId,
   asnSku,
   normSku,
+  classifyItemNote,
   DELIVERY_MARKER,
   ASN_MARKER,
 };
