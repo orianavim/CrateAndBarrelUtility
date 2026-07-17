@@ -13,12 +13,9 @@ const PENDING_STATUSES = [STATUS.PENDING_ARRIVAL, STATUS.PENDING_PICKUP];
 // TERMINAL statuses: an existing order in one of these is considered "done", so
 // a PO on the delivery file that only matches a terminal order is RE-CREATED
 // (assumes a split ship: another order for the same PO shipped to the customer).
-// 6 = Cancelled is known. Add the numeric codes for Delivered, Rejected,
-// Damaged, Delivery Failed and Customer Pickup here once confirmed.
-const TERMINAL_STATUSES = new Set([
-  STATUS.CANCELLED, // 6
-  // TODO(codes): delivered, rejected, damaged, delivery-failed, customer-pickup
-]);
+// Covers cancelled, delivered, rejected, damaged, delivery failed, customer
+// pickup, etc. (confirmed status codes).
+const TERMINAL_STATUSES = new Set([5, 6, 7, 9, 11, 12, 18, 19, 20, 28]);
 function isTerminalStatus(order) {
   const n = Number(order && order.status);
   return Number.isFinite(n) && TERMINAL_STATUSES.has(n);
@@ -148,7 +145,11 @@ class GrasshopperClient {
   // ALREADY EXIST in Grasshopper (any status), via exact ref_order_number
   // search. Used to skip re-creating a PO and to show its matched order_id.
   // Runs in parallel batches and is retailer-scoped.
-  async findOrderIdsByRef(refs) {
+  // For each ref, return the LIVE (non-terminal) orders that exist, with their
+  // type, so the caller can decide existence PER SEGMENT (a booked return does
+  // not mean the delivery for the same PO exists).
+  // @returns Map(ref -> Array<{ order_id, type, status }>)
+  async findLiveOrdersByRef(refs) {
     const headers = await this._authHeader();
     const CONCURRENCY = 10;
     const map = new Map();
@@ -159,20 +160,18 @@ class GrasshopperClient {
           let url = `${this.baseUrl}/api/orders?ref_order_number=${encodeURIComponent(ref)}`;
           if (this.retailerId) url += `&retailer_id=${encodeURIComponent(this.retailerId)}`;
           const res = await fetch(url, { headers });
-          if (!res.ok) return null;
+          if (!res.ok) return [ref, []];
           const body = await res.json().catch(() => ({}));
           const rows = Array.isArray(body.data) ? body.data : [];
-          // The list filter is unreliable, so verify the ref matches ourselves.
-          const matches = rows.filter((o) => String(o.ref_order_number || '').trim() === ref);
-          // An order in a TERMINAL status (cancelled, delivered, rejected,
-          // damaged, delivery failed, customer pickup) does NOT count as
-          // existing — it must be re-created (split-ship assumption). Only a
-          // live (non-terminal) order means "already exists".
-          const live = matches.find((o) => !isTerminalStatus(o));
-          return live ? { ref, order_id: live.order_id || live.id } : null;
+          // The list filter is unreliable, so verify the ref matches ourselves,
+          // and keep only LIVE (non-terminal) orders.
+          const live = rows
+            .filter((o) => String(o.ref_order_number || '').trim() === ref && !isTerminalStatus(o))
+            .map((o) => ({ order_id: o.order_id || o.id, type: o.type, status: o.status }));
+          return [ref, live];
         })
       );
-      for (const r of found) if (r) map.set(r.ref, r.order_id);
+      for (const [ref, live] of found) map.set(ref, live);
     }
     return map;
   }
@@ -198,16 +197,35 @@ class GrasshopperClient {
   }
 
   // Create a single order via the structured Create Order API (Final Mile Only).
-  // Body is { order: {...} }.
+  // Body is { order: {...}, options: {...} }. ignore_duplicates lets us book a
+  // second order with the same PO# (e.g. split ship / return + delivery).
   async createOrder(order) {
     await this._authHeader();
     const res = await fetch(`${this.baseUrl}/api/orders`, {
       method: 'POST',
       headers: { Authorization: this._token, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ order }),
+      body: JSON.stringify({ order, options: { ignore_duplicates: true } }),
     });
     const text = await res.text().catch(() => '');
     if (!res.ok) throw new Error(`Create order failed (${res.status}): ${text.slice(0, 200)}`);
+    try {
+      return JSON.parse(text);
+    } catch (_) {
+      return { ok: true };
+    }
+  }
+
+  // Link a return order (type 2) to its delivery order (type 1). Called only
+  // after BOTH have been created successfully, for a PO that has pickup + delivery.
+  //   POST /api/orders/<returnOrderId>/link?target_order_id=<deliveryOrderId>&type=5
+  async linkOrders(returnOrderId, deliveryOrderId) {
+    await this._authHeader();
+    const url =
+      `${this.baseUrl}/api/orders/${encodeURIComponent(returnOrderId)}/link` +
+      `?target_order_id=${encodeURIComponent(deliveryOrderId)}&type=5`;
+    const res = await fetch(url, { method: 'PATCH', headers: { Authorization: this._token } });
+    const text = await res.text().catch(() => '');
+    if (!res.ok) throw new Error(`Link orders failed (${res.status}): ${text.slice(0, 200)}`);
     try {
       return JSON.parse(text);
     } catch (_) {
@@ -296,6 +314,7 @@ function normalizeOrder(o) {
     order_id: String(o.order_id),
     ref_order_number: (o.ref_order_number || '').trim(),
     status: o.status,
+    type: o.type,
     created_at: o.created_at || null,
     customer: o.customer || null,
     line_items: lineItems.map((li) => ({
@@ -369,8 +388,12 @@ class MockGrasshopperClient {
     ];
   }
 
-  async findOrderIdsByRef() {
+  async findLiveOrdersByRef() {
     return new Map(); // mock: treat nothing as pre-existing
+  }
+
+  async linkOrders() {
+    return { ok: true, mock: true };
   }
 
   async createOrder() {

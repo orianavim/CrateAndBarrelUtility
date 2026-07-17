@@ -522,8 +522,14 @@ $('createBtn').onclick = async () => {
   poFilter = 'all'; buildPoFilters(); renderPoTable();
   const created = [];
   // One request per pending-create row. A split PO has one row per segment
-  // (delivery / pickup / service), each created as its own order.
-  const targets = poRows.map((r, i) => ({ r, i })).filter(x => x.r.state === 'pending_create');
+  // (delivery / pickup / service), each created as its own order. Order the
+  // work so that within a PO the DELIVERY is created before the PICKUP/return
+  // (required for the link step below).
+  const segRank = { delivery: 0, pickup: 1, service: 2 };
+  const targets = poRows.map((r, i) => ({ r, i }))
+    .filter(x => x.r.state === 'pending_create')
+    .sort((a, b) => a.r.po === b.r.po ? (segRank[a.r.segment] ?? 9) - (segRank[b.r.segment] ?? 9) : 0);
+  const createdIdByRefSeg = {}; // po -> { delivery: id, pickup: id }
   for (const { r, i } of targets) {
     poRows[i].state = 'creating'; updatePoRow(i);
     $('createMsg').innerHTML = `<span class="spinner"></span> Creating PO# ${esc(r.po)}${r.segment ? ' ('+esc(r.segment)+')' : ''}…`;
@@ -536,6 +542,23 @@ $('createBtn').onclick = async () => {
     updatePoRow(i);
     created.push(res);
     addCreateLog([res]);
+    if (res.ok) {
+      (createdIdByRefSeg[r.po] = createdIdByRefSeg[r.po] || {})[r.segment] = res.order_id;
+      // After the RETURN (pickup) is created, if its DELIVERY was also created in
+      // this run, link them: return (type 2) -> delivery (type 1), type=5.
+      if (r.segment === 'pickup') {
+        const deliveryId = createdIdByRefSeg[r.po].delivery;
+        if (deliveryId) {
+          $('createMsg').innerHTML = `<span class="spinner"></span> Linking return ${esc(res.order_id)} → delivery ${esc(deliveryId)}…`;
+          let lk;
+          try {
+            lk = await fetch('/api/link-orders', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ jobId, returnOrderId: res.order_id, deliveryOrderId: deliveryId }) }).then(x => x.json());
+          } catch (err) { lk = { ok:false, error: err.message }; }
+          logEntries = [{ kind:'create', text: `Link ${r.po} → return ${res.order_id} linked to delivery ${deliveryId} · ${lk.ok ? 'OK' : 'FAILED · ' + (lk.error||'unknown error')}` }].concat(logEntries);
+          buildLogFilters(); renderLog();
+        }
+      }
+    }
   }
   const failed = created.filter(r => !r.ok).length;
   $('createMsg').innerHTML = `<span class="ok">✓ ${created.length - failed} created</span>` + (failed ? ` · <span class="err">${failed} failed</span>` : '');

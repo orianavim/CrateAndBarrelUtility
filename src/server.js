@@ -163,6 +163,21 @@ function segmentize(rows) {
   return { present, rowsBySeg };
 }
 
+// Grasshopper order type for each segment: delivery=1, return/pickup=2, service=4.
+const SEGMENT_TO_TYPE = { delivery: 1, pickup: 2, service: 4 };
+
+// Best-effort segment-type of an EXISTING Grasshopper order. Uses the numeric
+// `type` when present, else infers from the order_id prefix (RA=return,
+// SVC=service, otherwise delivery).
+function orderSegType(o) {
+  const t = Number(o && o.type);
+  if (t === 2 || t === 4 || t === 1) return t;
+  const id = String((o && o.order_id) || '');
+  if (/^RA/i.test(id)) return 2;
+  if (/^SVC/i.test(id)) return 4;
+  return 1;
+}
+
 // Rows of one PO belonging to one segment.
 function segmentRows(delivery, ref, segment) {
   return (delivery || []).filter(
@@ -204,7 +219,15 @@ app.post('/api/analyze', requireAuth, upload.array('files'), async (req, res) =>
     const pending = await client.listPendingOrders();
     const deliveryRefs = [...new Set(parsed.delivery.map(deliveryOrderRef).filter(Boolean))];
     const deliverySet = new Set(deliveryRefs);
-    const pendingByRef = new Map(pending.map((o) => [(o.ref_order_number || '').trim(), o]));
+    // Group ALL pending orders by ref — one PO can have several (e.g. a booked
+    // return AND a delivery), so existence must be judged per order type.
+    const pendingByRef = new Map();
+    for (const o of pending) {
+      const r = (o.ref_order_number || '').trim();
+      if (!r) continue;
+      if (!pendingByRef.has(r)) pendingByRef.set(r, []);
+      pendingByRef.get(r).push(o);
+    }
 
     // Delivery rows grouped by PO (for customer / item count).
     const rowsByRef = new Map();
@@ -214,34 +237,54 @@ app.post('/api/analyze', requireAuth, upload.array('files'), async (req, res) =>
       if (!rowsByRef.has(r)) rowsByRef.set(r, []);
       rowsByRef.get(r).push(rec);
     }
+    const segByRef = new Map();
+    for (const ref of deliveryRefs) segByRef.set(ref, segmentize(rowsByRef.get(ref) || []));
 
-    // Existence: pending POs exist; for the rest, look up order_id via ref search.
-    const candidates = deliveryRefs.filter((r) => !pendingByRef.has(r));
-    const foundMap = req.session.mock ? new Map() : await client.findOrderIdsByRef(candidates);
-    const toCreateRefs = candidates.filter((r) => !foundMap.has(r));
-    const existingCount = deliveryRefs.length - toCreateRefs.length;
+    // Existence is PER SEGMENT (order type). Track which live order TYPES already
+    // exist for each ref, plus an order_id per (ref, type) for display.
+    const liveTypesByRef = new Map(); // ref -> Set<number type>
+    const orderIdByRefType = new Map(); // ref -> Map(type -> order_id)
+    const addLive = (ref, type, orderId) => {
+      if (!liveTypesByRef.has(ref)) liveTypesByRef.set(ref, new Set());
+      liveTypesByRef.get(ref).add(type);
+      if (!orderIdByRefType.has(ref)) orderIdByRefType.set(ref, new Map());
+      if (orderId && !orderIdByRefType.get(ref).has(type)) orderIdByRefType.get(ref).set(type, orderId);
+    };
+    for (const [ref, list] of pendingByRef) for (const o of list) addLive(ref, orderSegType(o), o.order_id);
 
-    // Unified PO list for the dashboard: every delivery PO (matched w/ order_id,
-    // or pending creation) plus the to-cancel orders.
+    // Search (any status) for refs where some present segment's type is NOT yet
+    // covered by a pending order — this catches a booked return whose delivery is
+    // missing, and live orders sitting in a non-pending active status.
+    const searchRefs = req.session.mock
+      ? []
+      : deliveryRefs.filter((ref) => {
+          const have = liveTypesByRef.get(ref) || new Set();
+          return segByRef.get(ref).present.some((seg) => !have.has(SEGMENT_TO_TYPE[seg]));
+        });
+    const foundMap = searchRefs.length ? await client.findLiveOrdersByRef(searchRefs) : new Map();
+    for (const [ref, list] of foundMap) for (const o of list) addLive(ref, orderSegType(o), o.order_id);
+
+    // Unified PO list for the dashboard, ONE ROW PER SEGMENT. Each segment is
+    // matched (its order type already exists live) or pending creation.
     const serviceLevelByRef = {};
     const typeByRef = {};
     const segTypesByRef = {};
+    const createSegsByRef = {};
     const pos = [];
     let toCreateUnits = 0;
+    let matchedUnits = 0;
     for (const ref of deliveryRefs) {
       const rows = rowsByRef.get(ref) || [];
       const first = rows[0] || {};
       serviceLevelByRef[ref] = String(first['Service Level'] || '').trim().toUpperCase();
       // Per-row classification: a PO can mix segments (some PICKUP rows, some
-      // delivery). Each present segment becomes its own order.
-      //   service ("SRV REQ") → type 4 service ticket
-      //   pickup  ("PICKUP")  → type 2 return order
-      //   delivery            → type 1 delivery
-      const { present, rowsBySeg } = segmentize(rows);
+      // delivery). Each present segment is its own order/row.
+      const { present, rowsBySeg } = segByRef.get(ref);
       segTypesByRef[ref] = present;
-      // Representative type for a single matched row (precedence service>pickup>delivery).
-      const repType = present[present.length - 1] || 'delivery';
-      typeByRef[ref] = repType;
+      typeByRef[ref] = present[present.length - 1] || 'delivery';
+      const have = liveTypesByRef.get(ref) || new Set();
+      const idByType = orderIdByRefType.get(ref) || new Map();
+      const createSegs = [];
       const baseOf = (type, itemCount) => ({
         po: ref,
         customer: String(first['Ship To Cust Name'] || '').trim(),
@@ -251,18 +294,21 @@ app.post('/api/analyze', requireAuth, upload.array('files'), async (req, res) =>
         error: null,
         created_at: null,
       });
-      if (pendingByRef.has(ref)) {
-        pos.push({ ...baseOf(repType, rows.length), order_id: pendingByRef.get(ref).order_id, state: 'matched' });
-      } else if (foundMap.has(ref)) {
-        pos.push({ ...baseOf(repType, rows.length), order_id: foundMap.get(ref), state: 'matched' });
-      } else {
-        // Pending creation: one row per segment so a split PO shows two orders.
-        for (const seg of present) {
+      for (const seg of present) {
+        const segType = SEGMENT_TO_TYPE[seg];
+        if (have.has(segType)) {
+          pos.push({ ...baseOf(seg, rowsBySeg[seg].length), segment: seg, order_id: idByType.get(segType) || null, state: 'matched' });
+          matchedUnits += 1;
+        } else {
           pos.push({ ...baseOf(seg, rowsBySeg[seg].length), segment: seg, order_id: null, state: 'pending_create' });
+          createSegs.push(seg);
           toCreateUnits += 1;
         }
       }
+      if (createSegs.length) createSegsByRef[ref] = createSegs;
     }
+    const toCreateRefs = Object.keys(createSegsByRef);
+    const existingCount = matchedUnits;
 
     // To-cancel: pending orders not on today's delivery file — only when a
     // delivery file was uploaded (otherwise we can't tell what to cancel).
@@ -292,12 +338,13 @@ app.post('/api/analyze', requireAuth, upload.array('files'), async (req, res) =>
       serviceLevelByRef,
       typeByRef,
       segTypesByRef,
+      createSegsByRef,
       toCreateRefs,
       toCancel: toCancelRows,
       parsedByRef: null,
       parsedByUnit: {},
       cancelStatusById: {},
-      counts: { deliveryTotal: deliveryRefs.length, existing: existingCount, toCreate: toCreateUnits, toCancel: toCancelRows.length },
+      counts: { deliveryTotal: matchedUnits + toCreateUnits, existing: existingCount, toCreate: toCreateUnits, toCancel: toCancelRows.length },
       created: { count: 0, failed: 0, results: [] },
       result: null,
     };
@@ -360,12 +407,16 @@ app.post('/api/create-prepare', requireAuth, async (req, res) => {
     // delivery). Service segments are built at create time, not imported.
     job.parsedByUnit = {};
     for (const ref of job.toCreateRefs) {
-      const segs = (job.segTypesByRef && job.segTypesByRef[ref]) || [];
-      const nonService = segs.filter((s) => s !== 'service');
-      const single = segs.length === 1;
-      for (const seg of nonService) {
+      const present = (job.segTypesByRef && job.segTypesByRef[ref]) || [];
+      const createSegs = (job.createSegsByRef && job.createSegsByRef[ref]) || present;
+      // Reuse the bulk import only when the whole PO is a single segment. If the
+      // PO has multiple present segments (even if we only create one), the bulk
+      // parse merges all rows, so re-import that segment on its own.
+      const singlePresent = present.length === 1;
+      for (const seg of createSegs) {
+        if (seg === 'service') continue; // built at create time
         const uid = ref + '::' + seg;
-        if (single) {
+        if (singlePresent) {
           job.parsedByUnit[uid] = job.parsedByRef.get(ref) || null;
         } else {
           const segBuf = buildImportBuffer(job.deliveryBuffers, new Set([ref]), { keepSegment: seg });
@@ -375,9 +426,9 @@ app.post('/api/create-prepare', requireAuth, async (req, res) => {
       }
     }
 
-    // If any order to create is a RETURN (pickup segment → type 2), we need the
-    // selected Region's address as the return destination.
-    const hasReturn = job.toCreateRefs.some((r) => (job.segTypesByRef[r] || []).includes('pickup'));
+    // A Region is only needed if we are actually CREATING a return segment (a
+    // pickup whose return is already booked doesn't require one).
+    const hasReturn = job.toCreateRefs.some((r) => ((job.createSegsByRef && job.createSegsByRef[r]) || []).includes('pickup'));
     if (hasReturn) {
       if (!job.regionId) {
         return res.status(400).json({ error: 'This file has pickups (return orders). Select a Region in the Account section first — its address is used as the return destination.' });
@@ -406,7 +457,7 @@ app.post('/api/create-one', requireAuth, async (req, res) => {
   // Which segment of this PO to create. A PO with mixed PICKUP + delivery rows
   // produces two units; the client sends the segment per row. Default to the
   // PO's representative segment for single-segment POs / older clients.
-  const segs = (job.segTypesByRef && job.segTypesByRef[ref]) || [];
+  const segs = (job.createSegsByRef && job.createSegsByRef[ref]) || (job.segTypesByRef && job.segTypesByRef[ref]) || [];
   let segment = String(req.body.segment || '').trim();
   if (!segment) segment = segs.length ? segs[segs.length - 1] : (job.typeByRef && job.typeByRef[ref]) || 'delivery';
 
@@ -525,6 +576,23 @@ app.post('/api/create-one', requireAuth, async (req, res) => {
     return finish(true, { order_id: o.order_id || o.id || null, created_at: o.created_at || null, error: null, order: payload });
   } catch (err) {
     return finish(false, { order_id: null, created_at: null, error: err.message, order: payload });
+  }
+});
+
+// STEP 2c — Link a return (type 2) to its delivery (type 1) for a split PO.
+// Called by the client only after BOTH orders were created successfully.
+app.post('/api/link-orders', requireAuth, async (req, res) => {
+  const job = JOBS.get(req.body.jobId);
+  if (!job || job.sid !== req.session.sid) return res.status(404).json({ error: 'Job not found or expired. Re-upload the files.' });
+  const returnOrderId = String(req.body.returnOrderId || '');
+  const deliveryOrderId = String(req.body.deliveryOrderId || '');
+  if (!returnOrderId || !deliveryOrderId) return res.json({ ok: false, error: 'Missing return or delivery order id.' });
+  if (job.mock) return res.json({ ok: true, mock: true });
+  try {
+    await job.client.linkOrders(returnOrderId, deliveryOrderId);
+    res.json({ ok: true, returnOrderId, deliveryOrderId });
+  } catch (err) {
+    res.json({ ok: false, error: err.message });
   }
 });
 
