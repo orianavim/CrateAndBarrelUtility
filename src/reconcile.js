@@ -1,6 +1,6 @@
 'use strict';
 
-const { deliveryOrderRef, asnMasterAsn, asnTrailerId, asnSku, normSku } = require('./parser');
+const { deliveryOrderRef, asnMasterAsn, asnTrailerId, asnSku, asnSkuQty, normSku } = require('./parser');
 const { STATUS } = require('./grasshopper');
 
 const STATUS_LABEL = {
@@ -42,22 +42,40 @@ function reconcile(pendingOrders, delivery, asn) {
     : [];
   const toCancelIds = new Set(toCancel.map((o) => o.order_id));
 
-  // 3. From the merged ASN files, build the set of inbound product SKUs and a
-  //    map sku -> set of Master ASNs (trailers) carrying that SKU. Matching is
-  //    product-SKU to product-SKU (commas stripped); Master ASN identifies the
-  //    trailer the item arrives on.
+  // 3. From the ASN files, build QUANTITY-AWARE availability PER FILE. Each ASN
+  //    row carries a "Sku Quantity" — how many units of that SKU arrive on that
+  //    trailer. Matching consumes these quantities (FIFO), so an order needing 8
+  //    of a SKU with only 5 inbound gets 5 line items matched (partial), and an
+  //    order can be fed from two files/trailers (split fulfillment). Rows with
+  //    no quantity column count as unlimited (back-compat).
   const asnSkus = new Set();
   const masterAsns = new Set();
-  const skuToTrailers = new Map(); // sku -> Set(master ASN)
+  const skuToTrailers = new Map(); // sku -> Set(master ASN)  (global, for display)
+  const fileOrder = []; // ASN files in upload order
+  const availByFile = new Map(); // file -> Map(sku -> remaining qty)
+  const trailersByFileSku = new Map(); // file -> Map(sku -> Set(trailer))
   for (const rec of asn) {
     const sku = asnSku(rec);
     const m = asnMasterAsn(rec);
+    const file = rec.__sourceFile || 'ASN';
     if (m) masterAsns.add(m);
     if (!sku) continue;
     asnSkus.add(sku);
     if (!skuToTrailers.has(sku)) skuToTrailers.set(sku, new Set());
-    if (m) skuToTrailers.get(sku).add(m);
-    else if (asnTrailerId(rec)) skuToTrailers.get(sku).add(asnTrailerId(rec));
+    const trailer = m || asnTrailerId(rec);
+    if (trailer) skuToTrailers.get(sku).add(trailer);
+    if (!availByFile.has(file)) {
+      availByFile.set(file, new Map());
+      trailersByFileSku.set(file, new Map());
+      fileOrder.push(file);
+    }
+    const avail = availByFile.get(file);
+    const qty = asnSkuQty(rec);
+    const prev = avail.get(sku) || 0;
+    avail.set(sku, qty === null ? Infinity : prev === Infinity ? Infinity : prev + qty);
+    const ft = trailersByFileSku.get(file);
+    if (!ft.has(sku)) ft.set(sku, new Set());
+    if (trailer) ft.get(sku).add(trailer);
   }
 
   // 3b. PICKUP exclusion. Delivery rows whose "Item Note" contains PICKUP are
@@ -90,36 +108,56 @@ function reconcile(pendingOrders, delivery, asn) {
 
   // 4. Manifest = pending orders that (a) survive (are on the delivery file,
   //    i.e. not in the cancel list) AND (b) have a deliverable line item whose
-  //    product SKU is arriving on an inbound trailer. Sorted oldest-first (FIFO).
-  const manifest = pendingOrders
-    .filter((o) => !toCancelIds.has(o.order_id))
-    .map((o) => {
-      // Line items we actually try to fulfill: not pickup-only, and in a
-      // matchable status (1/2).
-      const fulfillable = (o.line_items || []).filter((li) => !isPickupOnly(o, li) && isMatchableStatus(li));
-      const matchedItems = fulfillable
-        .filter((li) => asnSkus.has(normSku(li.sku)))
-        .map((li) => ({
-          item_id: li.item_id || '',
-          sku: normSku(li.sku),
-          master_asns: Array.from(skuToTrailers.get(normSku(li.sku)) || []),
-        }));
-      const totalItems = fulfillable.length;
-      const fullyFulfilled = totalItems > 0 && matchedItems.length === totalItems;
-      return {
-        ...o,
-        matched_items: matchedItems,
-        total_items: totalItems,
-        matched_count: matchedItems.length,
-        fully_fulfilled: fullyFulfilled,
-      };
-    })
-    .filter((o) => o.matched_items.length > 0)
-    .sort(sortByCreatedAsc);
+  //    product SKU is arriving with remaining quantity. Orders are walked
+  //    OLDEST-FIRST (FIFO) so earlier orders consume the available quantities
+  //    first. Each line item is ALLOCATED to one ASN file (files tried in upload
+  //    order) that still has enough quantity for it; the allocation decides
+  //    which manifest that line item lands on.
+  const surviving = pendingOrders.filter((o) => !toCancelIds.has(o.order_id)).sort(sortByCreatedAsc);
+  const manifest = [];
+  for (const o of surviving) {
+    // Line items we actually try to fulfill: not pickup-only, and in a
+    // matchable status (1/2).
+    const fulfillable = (o.line_items || []).filter((li) => !isPickupOnly(o, li) && isMatchableStatus(li));
+    const matchedItems = [];
+    for (const li of fulfillable) {
+      const sku = normSku(li.sku);
+      if (!asnSkus.has(sku)) continue;
+      const need = Number(li.quantity) || 1;
+      // First file (in upload order) with enough remaining quantity gets it.
+      let allocated = null;
+      for (const file of fileOrder) {
+        const avail = availByFile.get(file);
+        const rem = avail.get(sku) || 0;
+        if (rem >= need) {
+          if (rem !== Infinity) avail.set(sku, rem - need);
+          allocated = file;
+          break;
+        }
+      }
+      if (!allocated) continue; // quantity exhausted -> stays unmatched (partial order)
+      matchedItems.push({
+        item_id: li.item_id || '',
+        sku,
+        quantity: need,
+        file: allocated,
+        master_asns: Array.from((trailersByFileSku.get(allocated) || new Map()).get(sku) || skuToTrailers.get(sku) || []),
+      });
+    }
+    if (!matchedItems.length) continue;
+    const totalItems = fulfillable.length;
+    manifest.push({
+      ...o,
+      matched_items: matchedItems,
+      total_items: totalItems,
+      matched_count: matchedItems.length,
+      fully_fulfilled: totalItems > 0 && matchedItems.length === totalItems,
+    });
+  }
 
   // 5. Flatten to LINE-ITEM rows in FIFO order. Each matched line item becomes
-  //    a row carrying the order # and line item #, ready for the inbound
-  //    manifest. Orders are already oldest-first; we keep that order.
+  //    a row carrying the order #, line item # and the ASN FILE it was allocated
+  //    to (one manifest is created per file). Orders are already oldest-first.
   const manifestLines = [];
   let seq = 0;
   for (const o of manifest) {
@@ -130,6 +168,7 @@ function reconcile(pendingOrders, delivery, asn) {
         ref_order_number: o.ref_order_number,
         line_item_id: mi.item_id,
         sku: mi.sku,
+        file: mi.file,
         trailer: (mi.master_asns || []).join(', '),
         fully_fulfilled: o.fully_fulfilled ? 'Yes' : 'No',
         items_matched: `${o.matched_count}/${o.total_items}`,
@@ -161,7 +200,17 @@ function reconcile(pendingOrders, delivery, asn) {
   for (const ln of manifestLines) {
     add(
       'match',
-      `MATCH #${ln.fifo_seq} — order ${ln.ref_order_number} (id ${ln.order_id}): line item ${ln.line_item_id} with SKU ${ln.sku} is arriving on trailer ${ln.trailer}, so it is added to the inbound manifest. Order fully fulfilled: ${ln.fully_fulfilled} (${ln.items_matched} items matched).`
+      `MATCH #${ln.fifo_seq} — order ${ln.ref_order_number} (id ${ln.order_id}): line item ${ln.line_item_id} with SKU ${ln.sku} is arriving on trailer ${ln.trailer} (file ${ln.file}), so it is added to that file's inbound manifest. Order fully fulfilled: ${ln.fully_fulfilled} (${ln.items_matched} items matched).`
+    );
+  }
+
+  // Partially fulfilled orders: some line items matched, others ran out of
+  // inbound quantity — call those out explicitly.
+  for (const o of manifest) {
+    if (o.fully_fulfilled) continue;
+    add(
+      'skip',
+      `PARTIAL — order ${o.ref_order_number} (id ${o.order_id}): only ${o.matched_count} of ${o.total_items} line item(s) matched; the remaining item(s) exceed the inbound "Sku Quantity" on the ASN file(s) and stay off the manifest.`
     );
   }
 

@@ -625,14 +625,14 @@ app.post('/api/match', requireAuth, async (req, res) => {
       text: `Orders: ${job.counts.existing} already existed, ${createdCount} newly created (of ${job.counts.toCreate} required).`,
     });
     job.result = result;
-    job.pendingForManifest = pending; // reused by build-manifest (per ASN file)
 
-    // One manifest per ASN file: summarize each file's matched orders/lines and
-    // its trailer-based name so the UI can show what will be created.
+    // One manifest per ASN file: the quantity-aware matcher already ALLOCATED
+    // each matched line item to a single file, so summarize per file from that
+    // allocation (no double counting when a SKU appears on both files).
     const manifestFiles = asnGroups(job.parsed.asn).map((g) => {
-      const r = reconcile(pending, job.parsed.delivery, g.rows);
-      const orders = new Set(r.manifest.map((o) => String(o.order_id))).size;
-      return { fileName: g.fileName, manifestName: manifestNameFromAsn(g.rows), orders, line_items: r.manifestLines.length };
+      const lines = result.manifestLines.filter((l) => l.file === g.fileName);
+      const orders = new Set(lines.map((l) => String(l.order_id))).size;
+      return { fileName: g.fileName, manifestName: manifestNameFromAsn(g.rows), orders, line_items: lines.length };
     });
 
     res.json({
@@ -720,12 +720,13 @@ app.post('/api/build-manifest', requireAuth, async (req, res) => {
     date = `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}/${d.getFullYear()}`;
   }
 
-  const pending = job.pendingForManifest || (await job.client.listPendingOrders());
   const manifests = [];
   for (const g of groups) {
-    const r = reconcile(pending, job.parsed.delivery, g.rows);
-    const order_ids = [...new Set(r.manifest.map((o) => String(o.order_id)))];
-    const line_items = r.manifestLines.map((l) => l.line_item_id).filter(Boolean);
+    // Use the quantity-aware allocation from matching: each line item was
+    // assigned to exactly one file, so filter the matched lines by file.
+    const lines = job.result.manifestLines.filter((l) => l.file === g.fileName);
+    const order_ids = [...new Set(lines.map((l) => String(l.order_id)))];
+    const line_items = lines.map((l) => l.line_item_id).filter(Boolean);
     const routeId = manifestNameFromAsn(g.rows);
 
     if (!order_ids.length) {

@@ -44,6 +44,7 @@ function buildWorkbook(result, meta = {}) {
     'Line Item #': r.line_item_id,
     SKU: r.sku,
     Trailer: r.trailer,
+    'ASN File': r.file || '',
     'Fully Fulfilled': r.fully_fulfilled,
     'Items Matched': r.items_matched,
     Status: r.status_label,

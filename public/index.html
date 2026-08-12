@@ -646,7 +646,7 @@ function renderManifest(d) {
   $('asnSkuList').innerHTML = (d.asnSkus && d.asnSkus.length)
     ? d.asnSkus.map(sk => `<span class="pill asn" style="margin:2px;display:inline-block;">${esc(sk)}</span>`).join(' ')
     : '<span class="muted">No SKUs found in ASN files.</span>';
-  $('tabManifest').innerHTML = table(d.manifestLines, ['fifo_seq','ref_order_number','order_id','line_item_id','sku','trailer','fully_fulfilled','items_matched','status_label','created_at']);
+  $('tabManifest').innerHTML = table(d.manifestLines, ['fifo_seq','ref_order_number','order_id','line_item_id','sku','trailer','file','fully_fulfilled','items_matched','status_label','created_at']);
   // One manifest per ASN file — list the names + counts that will be created.
   const files = d.manifestFiles || [];
   $('manifestList').innerHTML = files.length

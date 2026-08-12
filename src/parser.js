@@ -175,6 +175,16 @@ function asnSku(rec) {
   return normSku(rec['Sku']);
 }
 
+// The inbound quantity for the SKU on an ASN row ("Sku Quantity"). Returns a
+// number, or null when the column is absent/blank (treated as unlimited by the
+// matcher, preserving pre-quantity behavior).
+function asnSkuQty(rec) {
+  const raw = rec['Sku Quantity'];
+  if (raw === undefined || raw === null || String(raw).trim() === '') return null;
+  const n = Number(String(raw).replace(/,/g, '').trim());
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
 // Classify a single delivery row from its "Item Note" value. Precedence:
 //   service ("SRV REQ") > pickup ("PICKUP") > delivery (anything else).
 // This is per-ROW, so one PO can contain rows of different segments.
@@ -194,6 +204,7 @@ module.exports = {
   asnMasterAsn,
   asnTrailerId,
   asnSku,
+  asnSkuQty,
   normSku,
   classifyItemNote,
   DELIVERY_MARKER,
