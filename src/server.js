@@ -191,6 +191,22 @@ function manifestNameFromAsn(asn) {
   return `C&B - Inbound - ${trailers.join(', ')}`;
 }
 
+// Group ASN rows by their source file (upload order preserved). One manifest is
+// created per ASN file, so two uploaded ASN files → two manifests.
+function asnGroups(asn) {
+  const order = [];
+  const map = new Map();
+  for (const r of asn || []) {
+    const f = r.__sourceFile || 'ASN';
+    if (!map.has(f)) {
+      map.set(f, []);
+      order.push(f);
+    }
+    map.get(f).push(r);
+  }
+  return order.map((f) => ({ fileName: f, rows: map.get(f) }));
+}
+
 // STEP 1 — Analyze: figure out which orders need to be created and which are to
 // be cancelled. NO side effects (no import, no cancel, no matching yet).
 app.post('/api/analyze', requireAuth, upload.array('files'), async (req, res) => {
@@ -609,12 +625,23 @@ app.post('/api/match', requireAuth, async (req, res) => {
       text: `Orders: ${job.counts.existing} already existed, ${createdCount} newly created (of ${job.counts.toCreate} required).`,
     });
     job.result = result;
+    job.pendingForManifest = pending; // reused by build-manifest (per ASN file)
+
+    // One manifest per ASN file: summarize each file's matched orders/lines and
+    // its trailer-based name so the UI can show what will be created.
+    const manifestFiles = asnGroups(job.parsed.asn).map((g) => {
+      const r = reconcile(pending, job.parsed.delivery, g.rows);
+      const orders = new Set(r.manifest.map((o) => String(o.order_id))).size;
+      return { fileName: g.fileName, manifestName: manifestNameFromAsn(g.rows), orders, line_items: r.manifestLines.length };
+    });
+
     res.json({
       jobId: job.id,
       mockMode: job.mock,
       stats: result.stats,
       asnSkus: result.asnSkus,
       manifestName: manifestNameFromAsn(job.parsed.asn),
+      manifestFiles,
       manifest: result.manifest.map((o, i) => ({ fifo_seq: i + 1, ...orderToRow(o) })),
       manifestLines: result.manifestLines,
       log: result.log,
@@ -673,18 +700,17 @@ app.post('/api/confirm-cancel', requireAuth, async (req, res) => {
   });
 });
 
-// STEP 5 — Create an inbound manifest in Grasshopper and add all matched
-// orders + line items to it. Uses the manifest _id from creation for the entries.
+// STEP 5 — Create inbound manifests in Grasshopper: ONE MANIFEST PER ASN FILE.
+// Each manifest is named from its own file's trailer ids and gets only the
+// orders + line items matched against that file's SKUs (same matching logic).
 app.post('/api/build-manifest', requireAuth, async (req, res) => {
   const job = JOBS.get(req.body.jobId);
   if (!job || job.sid !== req.session.sid) return res.status(404).json({ error: 'Job not found or expired. Re-upload the files.' });
   if (!job.result) return res.status(409).json({ error: 'Run matching first.' });
 
-  const order_ids = [...new Set(job.result.manifest.map((o) => String(o.order_id)))];
-  const line_items = job.result.manifestLines.map((l) => l.line_item_id).filter(Boolean);
-  if (!order_ids.length) return res.status(400).json({ error: 'No matched orders to add to a manifest.' });
+  const groups = asnGroups(job.parsed.asn);
+  if (!groups.length) return res.status(400).json({ error: 'No ASN file(s) to build a manifest from.' });
 
-  const routeId = (req.body.routeId && String(req.body.routeId).trim()) || manifestNameFromAsn(job.parsed.asn);
   // Accept YYYY-MM-DD (from the date picker) and format to MM/DD/YYYY for the API.
   let date = String(req.body.date || '').trim();
   const ymd = date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -694,38 +720,54 @@ app.post('/api/build-manifest', requireAuth, async (req, res) => {
     date = `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}/${d.getFullYear()}`;
   }
 
-  try {
-    if (job.mock) {
-      return res.json({ manifest_id: 'MOCK-MANIFEST', route_id: routeId, date, orders: order_ids.length, line_items: line_items.length, mock: true });
+  const pending = job.pendingForManifest || (await job.client.listPendingOrders());
+  const manifests = [];
+  for (const g of groups) {
+    const r = reconcile(pending, job.parsed.delivery, g.rows);
+    const order_ids = [...new Set(r.manifest.map((o) => String(o.order_id)))];
+    const line_items = r.manifestLines.map((l) => l.line_item_id).filter(Boolean);
+    const routeId = manifestNameFromAsn(g.rows);
+
+    if (!order_ids.length) {
+      manifests.push({ fileName: g.fileName, route_id: routeId, orders: 0, line_items: 0, skipped: true });
+      continue;
     }
-    const manifestPayload = {
-      type: 2,
-      load_type: 1,
-      route_id: routeId,
-      scheduled_date: date,
-      arrival_date: date, // same as scheduled per spec
-      direction: 2,
-    };
-    // Destination region = the Region selected at the top of the page.
-    if (job.regionId) manifestPayload.destination_region_id = job.regionId;
-    const manifest = await job.client.createManifest(manifestPayload);
-    const manifestId = manifest._id || manifest.id || (manifest.data && (manifest.data._id || manifest.data.id));
-    if (!manifestId) return res.status(500).json({ error: 'Manifest created but no _id was returned.' });
-
-    await job.client.addManifestEntries(manifestId, {
-      order_ids,
-      stop_number: null,
-      entry_type: '1',
-      stop_confirmed: null,
-      confirmed_with: null,
-      geolocation: null,
-      line_items,
-    });
-
-    res.json({ manifest_id: manifestId, route_id: routeId, date, orders: order_ids.length, line_items: line_items.length });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    if (job.mock) {
+      manifests.push({ fileName: g.fileName, manifest_id: 'MOCK-MANIFEST', route_id: routeId, orders: order_ids.length, line_items: line_items.length, mock: true });
+      continue;
+    }
+    try {
+      const manifestPayload = {
+        type: 2,
+        load_type: 1,
+        route_id: routeId,
+        scheduled_date: date,
+        arrival_date: date, // same as scheduled per spec
+        direction: 2,
+      };
+      if (job.regionId) manifestPayload.destination_region_id = job.regionId;
+      const manifest = await job.client.createManifest(manifestPayload);
+      const manifestId = manifest._id || manifest.id || (manifest.data && (manifest.data._id || manifest.data.id));
+      if (!manifestId) {
+        manifests.push({ fileName: g.fileName, route_id: routeId, error: 'Manifest created but no _id was returned.' });
+        continue;
+      }
+      await job.client.addManifestEntries(manifestId, {
+        order_ids,
+        stop_number: null,
+        entry_type: '1',
+        stop_confirmed: null,
+        confirmed_with: null,
+        geolocation: null,
+        line_items,
+      });
+      manifests.push({ fileName: g.fileName, manifest_id: manifestId, route_id: routeId, orders: order_ids.length, line_items: line_items.length });
+    } catch (err) {
+      manifests.push({ fileName: g.fileName, route_id: routeId, error: err.message });
+    }
   }
+
+  res.json({ date, manifests });
 });
 
 app.get('/api/download/:jobId', requireAuth, (req, res) => {

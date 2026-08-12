@@ -235,13 +235,13 @@
     <div class="step" style="margin-top:18px;">Inbound Manifest (line items, FIFO)</div>
     <div id="tabManifest" class="scroll" style="margin-top:6px;"></div>
 
-    <div class="step" style="margin-top:20px;">Create inbound manifest in Grasshopper</div>
-    <p class="lead" style="margin:4px 0 10px;">Creates an inbound freight manifest and adds every matched order &amp; line item above.</p>
+    <div class="step" style="margin-top:20px;">Create inbound manifests in Grasshopper</div>
+    <p class="lead" style="margin:4px 0 10px;">One manifest is created per ASN file, each named from its own trailer ids and containing the orders &amp; line items matched to that file.</p>
+    <div id="manifestList" style="margin:0 0 10px; font-size:13px;"></div>
     <div class="row">
-      <input id="manifestName" type="text" value="Inbound freight" placeholder="Manifest name" style="max-width:260px;" />
       <label style="margin:0 6px 0 0;">Inbound date</label>
       <input id="manifestDate" type="date" style="max-width:170px;" />
-      <button id="createManifestBtn" class="btn">Create inbound manifest</button>
+      <button id="createManifestBtn" class="btn">Create inbound manifests</button>
       <span id="manifestMsg" class="muted"></span>
     </div>
 
@@ -647,28 +647,45 @@ function renderManifest(d) {
     ? d.asnSkus.map(sk => `<span class="pill asn" style="margin:2px;display:inline-block;">${esc(sk)}</span>`).join(' ')
     : '<span class="muted">No SKUs found in ASN files.</span>';
   $('tabManifest').innerHTML = table(d.manifestLines, ['fifo_seq','ref_order_number','order_id','line_item_id','sku','trailer','fully_fulfilled','items_matched','status_label','created_at']);
-  // Auto-generated manifest name from the ASN trailer ids (editable).
-  if (d.manifestName) $('manifestName').value = d.manifestName;
+  // One manifest per ASN file — list the names + counts that will be created.
+  const files = d.manifestFiles || [];
+  $('manifestList').innerHTML = files.length
+    ? files.map(f => `<div style="padding:4px 0;">📦 <b>${esc(f.manifestName)}</b> <span class="muted">— ${f.orders} order(s), ${f.line_items} line item(s) · from ${esc(f.fileName)}</span>${f.orders? '' : ' <span class="err">(nothing matched — will be skipped)</span>'}</div>`).join('')
+    : '<span class="muted">No ASN files to build manifests from.</span>';
   // default inbound date = today (yyyy-mm-dd for the date picker)
   if ($('manifestDate') && !$('manifestDate').value) {
     const t = new Date(); $('manifestDate').value = `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`;
   }
+  const creatable = files.filter(f => f.orders > 0).length;
+  $('createManifestBtn').textContent = `Create ${creatable || ''} inbound manifest${creatable === 1 ? '' : 's'}`.replace('  ', ' ');
   $('manifestMsg').textContent = '';
-  $('createManifestBtn').disabled = !(d.manifestLines && d.manifestLines.length);
+  $('createManifestBtn').disabled = creatable === 0;
   $('results').scrollIntoView({ behavior:'smooth', block:'start' });
 }
 $('downloadBtn').onclick = () => { if (jobId) window.location = '/api/download/' + jobId; };
 $('createManifestBtn').onclick = async () => {
   if (!jobId) return;
   $('createManifestBtn').disabled = true;
-  $('manifestMsg').innerHTML = '<span class="spinner"></span> Creating manifest…';
+  $('manifestMsg').innerHTML = '<span class="spinner"></span> Creating manifest(s)…';
   try {
     const res = await fetch('/api/build-manifest', { method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ jobId, routeId: $('manifestName').value.trim(), date: $('manifestDate').value }) });
+      body: JSON.stringify({ jobId, date: $('manifestDate').value }) });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Create manifest failed');
-    $('manifestMsg').innerHTML = `<span class="ok">✓ Manifest ${esc(data.manifest_id)} created</span> · ${data.orders} order(s), ${data.line_items} line item(s)` + (data.mock ? ' (mock)' : '');
-    showLog([{ kind:'info', text:`Created inbound manifest ${data.manifest_id} (route_id "${data.route_id}", date ${data.date}) with ${data.orders} order(s) and ${data.line_items} line item(s).` }].concat(logEntries));
+    if (!res.ok) throw new Error(data.error || 'Create manifests failed');
+    const list = data.manifests || [];
+    const okCount = list.filter(m => m.manifest_id && !m.error).length;
+    const failed = list.filter(m => m.error);
+    const skipped = list.filter(m => m.skipped);
+    $('manifestMsg').innerHTML = `<span class="ok">✓ ${okCount} manifest(s) created</span>`
+      + (failed.length ? ` · <span class="err">${failed.length} failed</span>` : '')
+      + (skipped.length ? ` · <span class="muted">${skipped.length} skipped (no matches)</span>` : '')
+      + (data.manifests.some(m=>m.mock) ? ' (mock)' : '');
+    const logs = list.map(m => ({ kind:'info', text: m.error
+        ? `Manifest FAILED for ${m.fileName} (route_id "${m.route_id}"): ${m.error}`
+        : m.skipped
+          ? `Manifest SKIPPED for ${m.fileName} (route_id "${m.route_id}") — no matched orders.`
+          : `Created inbound manifest ${m.manifest_id} (route_id "${m.route_id}", date ${data.date}) with ${m.orders} order(s) and ${m.line_items} line item(s) from ${m.fileName}.` }));
+    showLog(logs.concat(logEntries));
   } catch (err) {
     $('manifestMsg').innerHTML = '<span class="err">' + esc(err.message) + '</span>';
     $('createManifestBtn').disabled = false;
