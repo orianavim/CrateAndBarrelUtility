@@ -191,6 +191,18 @@ function manifestNameFromAsn(asn) {
   return `C&B - Inbound - ${trailers.join(', ')}`;
 }
 
+// Accept YYYY-MM-DD (date picker) → MM/DD/YYYY for the API; default today.
+function toApiDate(input) {
+  let date = String(input || '').trim();
+  const ymd = date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (ymd) date = `${ymd[2]}/${ymd[3]}/${ymd[1]}`;
+  if (!date) {
+    const d = new Date();
+    date = `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}/${d.getFullYear()}`;
+  }
+  return date;
+}
+
 // Group ASN rows by their source file (upload order preserved). One manifest is
 // created per ASN file, so two uploaded ASN files → two manifests.
 function asnGroups(asn) {
@@ -641,9 +653,11 @@ app.post('/api/match', requireAuth, async (req, res) => {
       stats: result.stats,
       asnSkus: result.asnSkus,
       manifestName: manifestNameFromAsn(job.parsed.asn),
+      pendingManifestName: `${manifestNameFromAsn(job.parsed.asn)} -PENDING-INVENTORY-FULFILLMENT`,
       manifestFiles,
       manifest: result.manifest.map((o, i) => ({ fifo_seq: i + 1, ...orderToRow(o) })),
       manifestLines: result.manifestLines,
+      unmatchedLines: result.unmatchedLines,
       log: result.log,
       toCancel: result.toCancel.map(orderToRow),
     });
@@ -769,6 +783,89 @@ app.post('/api/build-manifest', requireAuth, async (req, res) => {
   }
 
   res.json({ date, manifests });
+});
+
+// STEP 5b — Create the PENDING-INVENTORY-FULFILLMENT manifest: ONE manifest
+// collecting every line item that could NOT be matched to the ASN files (SKU
+// not inbound, or quantity exhausted). The user may pass an exclusion list of
+// { sku, qty } — up to qty unmatched units of that SKU are withheld from the
+// manifest (qty omitted/null = exclude ALL units of that SKU). Exclusions are
+// taken from the NEWEST orders first, so older orders keep their place.
+// Same manifest settings as the inbound ones; name = combined ASN manifest name
+// + " -PENDING-INVENTORY-FULFILLMENT".
+app.post('/api/build-fulfillment-manifest', requireAuth, async (req, res) => {
+  const job = JOBS.get(req.body.jobId);
+  if (!job || job.sid !== req.session.sid) return res.status(404).json({ error: 'Job not found or expired. Re-upload the files.' });
+  if (!job.result) return res.status(409).json({ error: 'Run matching first.' });
+
+  const all = job.result.unmatchedLines || [];
+  if (!all.length) return res.status(400).json({ error: 'No unmatched line items — nothing to put on a fulfillment manifest.' });
+
+  // Normalize the exclusion list: [{ sku, qty }] with commas stripped from SKUs.
+  const exclusions = new Map(); // sku -> remaining qty to exclude (Infinity = all)
+  for (const e of Array.isArray(req.body.exclusions) ? req.body.exclusions : []) {
+    const sku = normSku(e && e.sku);
+    if (!sku) continue;
+    const q = e.qty === undefined || e.qty === null || e.qty === '' ? Infinity : Number(e.qty);
+    if (!Number.isFinite(q) && q !== Infinity) continue;
+    exclusions.set(sku, (exclusions.get(sku) === Infinity ? Infinity : (exclusions.get(sku) || 0) + q));
+  }
+
+  // Apply exclusions newest-first (reverse FIFO), so the oldest orders stay on.
+  const excludedIds = new Set();
+  let excludedCount = 0;
+  if (exclusions.size) {
+    const newestFirst = [...all].reverse();
+    for (const ln of newestFirst) {
+      const rem = exclusions.get(ln.sku);
+      if (!rem) continue;
+      const take = Number(ln.quantity) || 1;
+      if (rem !== Infinity && rem < take) continue; // not enough exclusion budget for this line
+      excludedIds.add(ln.line_item_id);
+      excludedCount += 1;
+      if (rem !== Infinity) exclusions.set(ln.sku, rem - take);
+    }
+  }
+
+  const lines = all.filter((l) => !excludedIds.has(l.line_item_id));
+  if (!lines.length) return res.status(400).json({ error: `All ${all.length} unmatched line item(s) were excluded — nothing left for the manifest.` });
+
+  const order_ids = [...new Set(lines.map((l) => String(l.order_id)))];
+  const line_items = lines.map((l) => l.line_item_id).filter(Boolean);
+  const routeId = `${manifestNameFromAsn(job.parsed.asn)} -PENDING-INVENTORY-FULFILLMENT`;
+  const date = toApiDate(req.body.date);
+
+  try {
+    if (job.mock) {
+      return res.json({ manifest_id: 'MOCK-FULFILLMENT-MANIFEST', route_id: routeId, date, orders: order_ids.length, line_items: line_items.length, excluded: excludedCount, mock: true });
+    }
+    const manifestPayload = {
+      type: 2,
+      load_type: 1,
+      route_id: routeId,
+      scheduled_date: date,
+      arrival_date: date,
+      direction: 2,
+    };
+    if (job.regionId) manifestPayload.destination_region_id = job.regionId;
+    const manifest = await job.client.createManifest(manifestPayload);
+    const manifestId = manifest._id || manifest.id || (manifest.data && (manifest.data._id || manifest.data.id));
+    if (!manifestId) return res.status(500).json({ error: 'Fulfillment manifest created but no _id was returned.' });
+
+    await job.client.addManifestEntries(manifestId, {
+      order_ids,
+      stop_number: null,
+      entry_type: '1',
+      stop_confirmed: null,
+      confirmed_with: null,
+      geolocation: null,
+      line_items,
+    });
+
+    res.json({ manifest_id: manifestId, route_id: routeId, date, orders: order_ids.length, line_items: line_items.length, excluded: excludedCount });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/download/:jobId', requireAuth, (req, res) => {

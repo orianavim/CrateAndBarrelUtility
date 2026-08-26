@@ -115,15 +115,24 @@ function reconcile(pendingOrders, delivery, asn) {
   //    which manifest that line item lands on.
   const surviving = pendingOrders.filter((o) => !toCancelIds.has(o.order_id)).sort(sortByCreatedAsc);
   const manifest = [];
+  // Fulfillable line items that did NOT match the ASN (SKU not inbound, or the
+  // inbound quantity ran out). These feed the PENDING-INVENTORY-FULFILLMENT
+  // manifest. Kept in the same FIFO order as matching.
+  const unmatchedLines = [];
+  let useq = 0;
   for (const o of surviving) {
     // Line items we actually try to fulfill: not pickup-only, and in a
     // matchable status (1/2).
     const fulfillable = (o.line_items || []).filter((li) => !isPickupOnly(o, li) && isMatchableStatus(li));
     const matchedItems = [];
+    const unmatchedItems = [];
     for (const li of fulfillable) {
       const sku = normSku(li.sku);
-      if (!asnSkus.has(sku)) continue;
       const need = Number(li.quantity) || 1;
+      if (!asnSkus.has(sku)) {
+        unmatchedItems.push({ li, sku, need, reason: 'SKU not on any ASN file' });
+        continue;
+      }
       // First file (in upload order) with enough remaining quantity gets it.
       let allocated = null;
       for (const file of fileOrder) {
@@ -135,13 +144,29 @@ function reconcile(pendingOrders, delivery, asn) {
           break;
         }
       }
-      if (!allocated) continue; // quantity exhausted -> stays unmatched (partial order)
+      if (!allocated) {
+        unmatchedItems.push({ li, sku, need, reason: 'inbound Sku Quantity exhausted' });
+        continue;
+      }
       matchedItems.push({
         item_id: li.item_id || '',
         sku,
         quantity: need,
         file: allocated,
         master_asns: Array.from((trailersByFileSku.get(allocated) || new Map()).get(sku) || skuToTrailers.get(sku) || []),
+      });
+    }
+    for (const u of unmatchedItems) {
+      unmatchedLines.push({
+        seq: ++useq,
+        order_id: o.order_id,
+        ref_order_number: o.ref_order_number,
+        line_item_id: u.li.item_id || '',
+        sku: u.sku,
+        quantity: u.need,
+        reason: u.reason,
+        status_label: STATUS_LABEL[o.status] || String(o.status),
+        created_at: o.created_at || '',
       });
     }
     if (!matchedItems.length) continue;
@@ -225,13 +250,14 @@ function reconcile(pendingOrders, delivery, asn) {
 
   add(
     'info',
-    `Result: ${manifestLines.length} line item(s) across ${manifest.length} order(s) added to the inbound manifest (FIFO order); ${toCancel.length} order(s) flagged to cancel.`
+    `Result: ${manifestLines.length} line item(s) across ${manifest.length} order(s) added to the inbound manifest (FIFO order); ${toCancel.length} order(s) flagged to cancel; ${unmatchedLines.length} line item(s) unmatched (candidates for the PENDING-INVENTORY-FULFILLMENT manifest).`
   );
 
   return {
     toCancel,
     manifest,
     manifestLines,
+    unmatchedLines,
     log,
     asnSkus: Array.from(asnSkus),
     masterAsns: Array.from(masterAsns),
@@ -242,6 +268,7 @@ function reconcile(pendingOrders, delivery, asn) {
       toCancelCount: toCancel.length,
       manifestCount: manifest.length,
       manifestLineCount: manifestLines.length,
+      unmatchedLineCount: unmatchedLines.length,
       asnSkuCount: asnSkus.size,
       masterAsnCount: masterAsns.size,
     },

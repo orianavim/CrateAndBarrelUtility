@@ -245,6 +245,18 @@
       <span id="manifestMsg" class="muted"></span>
     </div>
 
+    <div class="step" style="margin-top:24px;">Create fulfillment manifest</div>
+    <p class="lead" style="margin:4px 0 10px;">Collects every line item that could <b>not</b> be matched to the ASN files (SKU not inbound, or quantity exhausted) into one manifest named with the suffix <b>-PENDING-INVENTORY-FULFILLMENT</b>. Optionally exclude SKUs below before creating it.</p>
+    <div id="fulfillSummary" style="margin:0 0 8px; font-size:13px;"></div>
+    <div style="margin:0 0 10px;">
+      <label style="display:block; margin-bottom:4px;">Exclusion list (optional) — one per line: <code>SKU, quantity</code>. Omit the quantity to exclude every unit of that SKU.</label>
+      <textarea id="exclusionList" rows="4" style="width:100%; max-width:440px; font-family:monospace; font-size:12px;" placeholder="164098, 3&#10;155855"></textarea>
+    </div>
+    <div class="row">
+      <button id="createFulfillBtn" class="btn">Create fulfillment manifest</button>
+      <span id="fulfillMsg" class="muted"></span>
+    </div>
+
     <div class="row" style="margin-top:16px;">
       <button id="downloadBtn" class="btn light">Download manifest (.xlsx)</button>
     </div>
@@ -660,8 +672,41 @@ function renderManifest(d) {
   $('createManifestBtn').textContent = `Create ${creatable || ''} inbound manifest${creatable === 1 ? '' : 's'}`.replace('  ', ' ');
   $('manifestMsg').textContent = '';
   $('createManifestBtn').disabled = creatable === 0;
+  // Fulfillment manifest (unmatched line items)
+  const un = d.unmatchedLines || [];
+  const unOrders = new Set(un.map(l => l.order_id)).size;
+  $('fulfillSummary').innerHTML = un.length
+    ? `📋 <b>${esc(d.pendingManifestName || '-PENDING-INVENTORY-FULFILLMENT')}</b> <span class="muted">— ${un.length} unmatched line item(s) across ${unOrders} order(s)</span>`
+    : '<span class="muted">Every fulfillable line item was matched — no fulfillment manifest needed.</span>';
+  $('fulfillMsg').textContent = '';
+  $('createFulfillBtn').disabled = un.length === 0;
   $('results').scrollIntoView({ behavior:'smooth', block:'start' });
 }
+// Parse the exclusion textarea: one "SKU[, qty]" per line -> [{sku, qty|null}]
+function parseExclusions(text) {
+  return String(text || '').split(/\n+/).map(line => {
+    const m = line.trim().match(/^([\d,]+)\s*(?:[,x\s]\s*(\d+))?$/i);
+    if (!m) return null;
+    return { sku: m[1].replace(/,\s*$/,''), qty: m[2] !== undefined ? Number(m[2]) : null };
+  }).filter(Boolean);
+}
+$('createFulfillBtn').onclick = async () => {
+  if (!jobId) return;
+  $('createFulfillBtn').disabled = true;
+  $('fulfillMsg').innerHTML = '<span class="spinner"></span> Creating fulfillment manifest…';
+  try {
+    const exclusions = parseExclusions($('exclusionList').value);
+    const res = await fetch('/api/build-fulfillment-manifest', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ jobId, date: $('manifestDate').value, exclusions }) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Create fulfillment manifest failed');
+    $('fulfillMsg').innerHTML = `<span class="ok">✓ Manifest ${esc(data.manifest_id)} created</span> · ${data.orders} order(s), ${data.line_items} line item(s)` + (data.excluded ? ` · ${data.excluded} excluded` : '') + (data.mock ? ' (mock)' : '');
+    showLog([{ kind:'info', text:`Created fulfillment manifest ${data.manifest_id} (route_id "${data.route_id}", date ${data.date}) with ${data.orders} order(s) and ${data.line_items} line item(s); ${data.excluded||0} line item(s) excluded by the exclusion list.` }].concat(logEntries));
+  } catch (err) {
+    $('fulfillMsg').innerHTML = '<span class="err">' + esc(err.message) + '</span>';
+    $('createFulfillBtn').disabled = false;
+  }
+};
 $('downloadBtn').onclick = () => { if (jobId) window.location = '/api/download/' + jobId; };
 $('createManifestBtn').onclick = async () => {
   if (!jobId) return;
