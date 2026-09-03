@@ -201,6 +201,12 @@ class GrasshopperClient {
   // second order with the same PO# (e.g. split ship / return + delivery).
   async createOrder(order) {
     await this._authHeader();
+    // Default line-item weight: if no weight is assigned (missing, 0, or not a
+    // number), use 10 lbs.
+    for (const li of order.line_items || []) {
+      const w = Number(li.weight);
+      if (!Number.isFinite(w) || w <= 0) li.weight = 10;
+    }
     const res = await fetch(`${this.baseUrl}/api/orders`, {
       method: 'POST',
       headers: { Authorization: this._token, 'Content-Type': 'application/json' },
