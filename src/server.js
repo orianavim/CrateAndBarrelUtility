@@ -786,13 +786,11 @@ app.post('/api/build-manifest', requireAuth, async (req, res) => {
 });
 
 // STEP 5b — Create the PENDING-INVENTORY-FULFILLMENT manifest: ONE manifest
-// collecting every line item that could NOT be matched to the ASN files (SKU
-// not inbound, or quantity exhausted). The user may pass an exclusion list of
-// { sku, qty } — up to qty unmatched units of that SKU are withheld from the
-// manifest (qty omitted/null = exclude ALL units of that SKU). Exclusions are
-// taken from the NEWEST orders first, so older orders keep their place.
-// Same manifest settings as the inbound ones; name = combined ASN manifest name
-// + " -PENDING-INVENTORY-FULFILLMENT".
+// collecting the line items that could NOT be matched to the ASN files (SKU not
+// inbound, or quantity exhausted). The client shows the unmatched items in a
+// review table with toggles and sends the SELECTED line_item_ids — only those
+// go on the manifest. Same manifest settings as the inbound ones; name =
+// combined ASN manifest name + " -PENDING-INVENTORY-FULFILLMENT".
 app.post('/api/build-fulfillment-manifest', requireAuth, async (req, res) => {
   const job = JOBS.get(req.body.jobId);
   if (!job || job.sid !== req.session.sid) return res.status(404).json({ error: 'Job not found or expired. Re-upload the files.' });
@@ -801,34 +799,12 @@ app.post('/api/build-fulfillment-manifest', requireAuth, async (req, res) => {
   const all = job.result.unmatchedLines || [];
   if (!all.length) return res.status(400).json({ error: 'No unmatched line items — nothing to put on a fulfillment manifest.' });
 
-  // Normalize the exclusion list: [{ sku, qty }] with commas stripped from SKUs.
-  const exclusions = new Map(); // sku -> remaining qty to exclude (Infinity = all)
-  for (const e of Array.isArray(req.body.exclusions) ? req.body.exclusions : []) {
-    const sku = normSku(e && e.sku);
-    if (!sku) continue;
-    const q = e.qty === undefined || e.qty === null || e.qty === '' ? Infinity : Number(e.qty);
-    if (!Number.isFinite(q) && q !== Infinity) continue;
-    exclusions.set(sku, (exclusions.get(sku) === Infinity ? Infinity : (exclusions.get(sku) || 0) + q));
-  }
-
-  // Apply exclusions newest-first (reverse FIFO), so the oldest orders stay on.
-  const excludedIds = new Set();
-  let excludedCount = 0;
-  if (exclusions.size) {
-    const newestFirst = [...all].reverse();
-    for (const ln of newestFirst) {
-      const rem = exclusions.get(ln.sku);
-      if (!rem) continue;
-      const take = Number(ln.quantity) || 1;
-      if (rem !== Infinity && rem < take) continue; // not enough exclusion budget for this line
-      excludedIds.add(ln.line_item_id);
-      excludedCount += 1;
-      if (rem !== Infinity) exclusions.set(ln.sku, rem - take);
-    }
-  }
-
-  const lines = all.filter((l) => !excludedIds.has(l.line_item_id));
-  if (!lines.length) return res.status(400).json({ error: `All ${all.length} unmatched line item(s) were excluded — nothing left for the manifest.` });
+  // Only the toggled-on items go on the manifest. No selection array = all.
+  const lines = Array.isArray(req.body.selected)
+    ? all.filter((l) => req.body.selected.map(String).includes(String(l.line_item_id)))
+    : all;
+  const excludedCount = all.length - lines.length;
+  if (!lines.length) return res.status(400).json({ error: 'No line items selected — toggle at least one item on.' });
 
   const order_ids = [...new Set(lines.map((l) => String(l.order_id)))];
   const line_items = lines.map((l) => l.line_item_id).filter(Boolean);

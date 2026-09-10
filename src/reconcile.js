@@ -113,6 +113,20 @@ function reconcile(pendingOrders, delivery, asn) {
   //    first. Each line item is ALLOCATED to one ASN file (files tried in upload
   //    order) that still has enough quantity for it; the allocation decides
   //    which manifest that line item lands on.
+  // Ref -> Delivery Date from the delivery file (fallback schedule date for the
+  // pending-fulfillment review table).
+  const refDeliveryDate = new Map();
+  const fmtD = (v) => {
+    if (!v) return '';
+    if (v instanceof Date) return v.toISOString().slice(0, 10);
+    const m = String(v).match(/^(\d{4}-\d{2}-\d{2})/);
+    return m ? m[1] : String(v).trim();
+  };
+  for (const rec of delivery) {
+    const ref = deliveryOrderRef(rec);
+    if (ref && !refDeliveryDate.has(ref)) refDeliveryDate.set(ref, fmtD(rec['Delivery Date']));
+  }
+
   const surviving = pendingOrders.filter((o) => !toCancelIds.has(o.order_id)).sort(sortByCreatedAsc);
   const manifest = [];
   // Fulfillable line items that did NOT match the ASN (SKU not inbound, or the
@@ -157,14 +171,17 @@ function reconcile(pendingOrders, delivery, asn) {
       });
     }
     for (const u of unmatchedItems) {
+      const raw = o.raw || {};
       unmatchedLines.push({
         seq: ++useq,
         order_id: o.order_id,
         ref_order_number: o.ref_order_number,
         line_item_id: u.li.item_id || '',
+        name: u.li.name || '',
         sku: u.sku,
         quantity: u.need,
         reason: u.reason,
+        scheduled_date: fmtD(raw.scheduled_date) || refDeliveryDate.get((o.ref_order_number || '').trim()) || '',
         status_label: STATUS_LABEL[o.status] || String(o.status),
         created_at: o.created_at || '',
       });
