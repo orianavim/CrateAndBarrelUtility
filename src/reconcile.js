@@ -53,6 +53,7 @@ function reconcile(pendingOrders, delivery, asn) {
   const skuToTrailers = new Map(); // sku -> Set(master ASN)  (global, for display)
   const fileOrder = []; // ASN files in upload order
   const availByFile = new Map(); // file -> Map(sku -> remaining qty)
+  const totalQtyBySku = new Map(); // sku -> total expected qty across all ASN files
   const trailersByFileSku = new Map(); // file -> Map(sku -> Set(trailer))
   for (const rec of asn) {
     const sku = asnSku(rec);
@@ -73,6 +74,9 @@ function reconcile(pendingOrders, delivery, asn) {
     const qty = asnSkuQty(rec);
     const prev = avail.get(sku) || 0;
     avail.set(sku, qty === null ? Infinity : prev === Infinity ? Infinity : prev + qty);
+    // Total expected quantity per SKU across ALL ASN files (before consumption),
+    // shown in the fulfillment review's conflict view.
+    if (qty !== null) totalQtyBySku.set(sku, (totalQtyBySku.get(sku) || 0) + qty);
     const ft = trailersByFileSku.get(file);
     if (!ft.has(sku)) ft.set(sku, new Set());
     if (trailer) ft.get(sku).add(trailer);
@@ -117,10 +121,26 @@ function reconcile(pendingOrders, delivery, asn) {
   // pending-fulfillment review table).
   const refDeliveryDate = new Map();
   const fmtD = (v) => {
-    if (!v) return '';
+    if (v === undefined || v === null || v === '' || v === 0 || v === false) return '';
     if (v instanceof Date) return v.toISOString().slice(0, 10);
-    const m = String(v).match(/^(\d{4}-\d{2}-\d{2})/);
-    return m ? m[1] : String(v).trim();
+    // Excel serial date number (raw:true parses some cells this way).
+    if (typeof v === 'number' && v > 20000 && v < 80000) {
+      return new Date((v - 25569) * 86400000).toISOString().slice(0, 10);
+    }
+    const s = String(v).trim();
+    const iso = s.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (iso) return iso[1];
+    const us = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (us) return `${us[3]}-${us[1].padStart(2, '0')}-${us[2].padStart(2, '0')}`;
+    return s;
+  };
+  // Grasshopper's own schedule date, wherever it lives on the raw order.
+  const ghScheduleDate = (raw) => {
+    for (const k of ['scheduled_date', 'schedule_date', 'scheduled_delivery_date', 'delivery_date', 'promised_date', 'eta_date', 'eta']) {
+      const d = fmtD(raw && raw[k]);
+      if (d) return d;
+    }
+    return '';
   };
   for (const rec of delivery) {
     const ref = deliveryOrderRef(rec);
@@ -181,7 +201,7 @@ function reconcile(pendingOrders, delivery, asn) {
         sku: u.sku,
         quantity: u.need,
         reason: u.reason,
-        scheduled_date: fmtD(raw.scheduled_date) || refDeliveryDate.get((o.ref_order_number || '').trim()) || '',
+        scheduled_date: ghScheduleDate(raw) || refDeliveryDate.get((o.ref_order_number || '').trim()) || '',
         status_label: STATUS_LABEL[o.status] || String(o.status),
         created_at: o.created_at || '',
       });
@@ -275,6 +295,7 @@ function reconcile(pendingOrders, delivery, asn) {
     manifest,
     manifestLines,
     unmatchedLines,
+    asnQtyBySku: Object.fromEntries(totalQtyBySku),
     log,
     asnSkus: Array.from(asnSkus),
     masterAsns: Array.from(masterAsns),

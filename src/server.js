@@ -658,6 +658,7 @@ app.post('/api/match', requireAuth, async (req, res) => {
       manifest: result.manifest.map((o, i) => ({ fifo_seq: i + 1, ...orderToRow(o) })),
       manifestLines: result.manifestLines,
       unmatchedLines: result.unmatchedLines,
+      asnQtyBySku: result.asnQtyBySku || {},
       log: result.log,
       toCancel: result.toCancel.map(orderToRow),
     });

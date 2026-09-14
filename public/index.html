@@ -247,7 +247,10 @@
 
     <div class="step" style="margin-top:24px;">Create fulfillment manifest</div>
     <p class="lead" style="margin:4px 0 10px;">Line items that could <b>not</b> be matched to the ASN files (SKU not inbound, or quantity exhausted). Review the toggles — only the selected items go on the <b>-PENDING-INVENTORY-FULFILLMENT</b> manifest. Rows where the same SKU appears on several orders start <b>unselected</b>: pick which order(s) should get it.</p>
-    <div id="fulfillSummary" style="margin:0 0 8px; font-size:13px;"></div>
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin:0 0 8px;">
+      <div id="fulfillSummary" style="font-size:13px;"></div>
+      <div id="fulfillViewWrap" style="flex-shrink:0;"></div>
+    </div>
     <div id="fulfillTable" class="scroll" style="margin:0 0 10px; max-height:320px;"></div>
     <div class="row">
       <button id="createFulfillBtn" class="btn">Create fulfillment manifest</button>
@@ -675,40 +678,73 @@ function renderManifest(d) {
   $('fulfillSummary').innerHTML = un.length
     ? `📋 <b>${esc(d.pendingManifestName || '-PENDING-INVENTORY-FULFILLMENT')}</b> <span class="muted">— ${un.length} unmatched line item(s) across ${unOrders} order(s)</span>`
     : '<span class="muted">Every fulfillable line item was matched — no fulfillment manifest needed.</span>';
-  renderFulfillTable(un);
+  initFulfill(un, d.asnQtyBySku || {});
   $('fulfillMsg').textContent = '';
   $('createFulfillBtn').disabled = un.length === 0;
   $('results').scrollIntoView({ behavior:'smooth', block:'start' });
 }
+// ---- Fulfillment review table state ----
 // Toggle default: ON, unless the same SKU appears on 2+ DIFFERENT orders — then
 // all rows of that SKU start OFF so the user picks which order gets it.
-function renderFulfillTable(lines) {
-  if (!lines.length) { $('fulfillTable').innerHTML = ''; return; }
+let fulfillLines = [], fulfillSelected = new Set(), fulfillConflictSkus = new Set(),
+    fulfillQtyBySku = {}, fulfillView = 'all';
+function initFulfill(lines, qtyBySku) {
+  fulfillLines = lines; fulfillQtyBySku = qtyBySku || {}; fulfillView = 'all';
   const ordersBySku = {};
   for (const l of lines) (ordersBySku[l.sku] = ordersBySku[l.sku] || new Set()).add(l.order_id);
-  const refStyle = 'max-width:130px;width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+  fulfillConflictSkus = new Set(Object.keys(ordersBySku).filter(s => ordersBySku[s].size > 1));
+  fulfillSelected = new Set(lines.filter(l => !fulfillConflictSkus.has(l.sku)).map(l => String(l.line_item_id)));
+  renderFulfillTable();
+}
+function fulfillRow(l, refStyle) {
+  const conflict = fulfillConflictSkus.has(l.sku);
+  const checked = fulfillSelected.has(String(l.line_item_id));
+  return `<tr${conflict ? ' style="background:#fdf6ec;"' : ''}>
+    <td><input type="checkbox" class="cbFulfill" value="${esc(l.line_item_id)}" ${checked ? 'checked' : ''}></td>
+    <td style="${refStyle}" title="${esc(l.ref_order_number)}">${esc(l.ref_order_number)}</td>
+    <td>${esc(l.name || '')}${conflict && fulfillView === 'all' ? ' <span class="err" title="Same SKU on multiple orders — select which order(s) should receive it">⚠ shared SKU</span>' : ''}</td>
+    <td>${esc(l.sku)}</td>
+    <td>${esc(l.scheduled_date || '')}</td>
+  </tr>`;
+}
+function renderFulfillTable() {
+  if (!fulfillLines.length) { $('fulfillTable').innerHTML = ''; $('fulfillViewWrap').innerHTML = ''; return; }
+  const refStyle = 'max-width:230px;width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
   const head = `<tr><th style="width:34px;"></th><th style="${refStyle}">PO #</th><th>Item name</th><th>SKU</th><th>Schedule date</th></tr>`;
-  const body = lines.map(l => {
-    const conflict = (ordersBySku[l.sku] || new Set()).size > 1;
-    return `<tr${conflict ? ' style="background:#fdf6ec;"' : ''}>
-      <td><input type="checkbox" class="cbFulfill" value="${esc(l.line_item_id)}" ${conflict ? '' : 'checked'}></td>
-      <td style="${refStyle}" title="${esc(l.ref_order_number)}">${esc(l.ref_order_number)}</td>
-      <td>${esc(l.name || '')}${conflict ? ' <span class="err" title="Same SKU on multiple orders — select which order(s) should receive it">⚠ shared SKU</span>' : ''}</td>
-      <td>${esc(l.sku)}</td>
-      <td>${esc(l.scheduled_date || '')}</td>
-    </tr>`;
-  }).join('');
+  // Toggle lives OUTSIDE the scrolling table (top-right), so it stays visible.
+  $('fulfillViewWrap').innerHTML = fulfillConflictSkus.size
+    ? `<button id="fulfillViewBtn" class="btn light" style="font-size:12px; padding:6px 12px;">${fulfillView === 'all' ? `Show conflicts only (${fulfillConflictSkus.size} shared SKU${fulfillConflictSkus.size === 1 ? '' : 's'})` : 'Show all items'}</button>`
+    : '';
+  let body;
+  if (fulfillView === 'conflicts') {
+    // Group the conflicted rows by SKU, with the total expected quantity on the
+    // ASN in each group header so the user knows how many they can select.
+    body = [...fulfillConflictSkus].sort().map(sku => {
+      const rows = fulfillLines.filter(l => l.sku === sku);
+      const qty = fulfillQtyBySku[sku];
+      const expected = qty === undefined ? 'not on ASN' : `${qty} expected on ASN`;
+      const header = `<tr style="background:#f3eee6;"><td colspan="5" style="font-weight:600; padding:8px 10px;">SKU ${esc(sku)} — <span style="color:var(--warm);">${esc(String(expected))}</span> · ${rows.length} order line(s) below — select which should get it</td></tr>`;
+      return header + rows.map(l => fulfillRow(l, refStyle)).join('');
+    }).join('');
+  } else {
+    body = fulfillLines.map(l => fulfillRow(l, refStyle)).join('');
+  }
   $('fulfillTable').innerHTML = `<table><thead>${head}</thead><tbody>${body}</tbody></table>`;
-  document.querySelectorAll('.cbFulfill').forEach(c => c.onchange = updateFulfillCount);
+  document.querySelectorAll('.cbFulfill').forEach(c => c.onchange = () => {
+    if (c.checked) fulfillSelected.add(c.value); else fulfillSelected.delete(c.value);
+    updateFulfillCount();
+  });
+  const vb = document.getElementById('fulfillViewBtn');
+  if (vb) vb.onclick = () => { fulfillView = fulfillView === 'all' ? 'conflicts' : 'all'; renderFulfillTable(); };
   updateFulfillCount();
 }
 function updateFulfillCount() {
-  const n = document.querySelectorAll('.cbFulfill:checked').length;
+  const n = fulfillSelected.size;
   $('createFulfillBtn').textContent = `Create fulfillment manifest (${n} item${n === 1 ? '' : 's'})`;
 }
 $('createFulfillBtn').onclick = async () => {
   if (!jobId) return;
-  const selected = [...document.querySelectorAll('.cbFulfill:checked')].map(c => c.value);
+  const selected = [...fulfillSelected];
   if (!selected.length) { $('fulfillMsg').innerHTML = '<span class="err">Select at least one item.</span>'; return; }
   $('createFulfillBtn').disabled = true;
   $('fulfillMsg').innerHTML = '<span class="spinner"></span> Creating fulfillment manifest…';
