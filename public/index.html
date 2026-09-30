@@ -121,7 +121,8 @@
     <div class="pulse">
       <span id="topBadge" class="badge hidden"></span>
       <div id="userbox" class="userbox hidden"></div>
-      <img src="https://images.squarespace-cdn.com/content/v1/65e601fcee899853a1f8b308/884eccf4-96a9-425a-a365-fa97d1439f84/Pulse-Final-Mile-Logo-Large+%28No+Tagline%29.png?format=750w" alt="Pulse Final Mile" />
+      <span id="envIndicator" class="badge hidden" style="background:#f3eee6; color:#7a5410;"></span>
+      <img id="pulseLogo" src="https://images.squarespace-cdn.com/content/v1/65e601fcee899853a1f8b308/884eccf4-96a9-425a-a365-fa97d1439f84/Pulse-Final-Mile-Logo-Large+%28No+Tagline%29.png?format=750w" alt="Pulse Final Mile" style="cursor:pointer;" />
     </div>
   </div>
 </div>
@@ -134,10 +135,6 @@
       <h2 class="serif">Sign in to continue</h2>
       <p class="lead">Authenticate with your Grasshopper Labs credentials to access the manifest utility.</p>
 
-      <div id="envRow" class="hidden">
-        <label>Environment</label>
-        <div class="seg" id="envSeg"></div>
-      </div>
 
       <label>Client ID</label>
       <input id="liEmail" type="text" autocomplete="username" placeholder="you@grasshopperlabs.io" />
@@ -325,29 +322,34 @@ function showLogin(s) {
   $('userbox').classList.add('hidden');
   $('topBadge').classList.add('hidden');
   if (s && s.mockAvailable) $('mockRow').classList.remove('hidden');
-  renderEnvs(s || {});
+  syncEnvState(s || {});
 }
-// Build the environment picker from what the server offers. In production the
-// server exposes a single environment, so the picker is hidden entirely.
-function renderEnvs(s) {
-  const envs = (s.envs && s.envs.length) ? s.envs : ['production'];
-  selectedEnv = s.defaultEnv && envs.includes(s.defaultEnv) ? s.defaultEnv : envs[0];
-  const label = { staging: 'Staging', production: 'Production' };
-  $('envSeg').innerHTML = envs.map(e =>
-    `<button type="button" data-env="${e}" class="${e===selectedEnv?'on':''}">${label[e]||e}</button>`
-  ).join('');
-  $('envRow').classList.toggle('hidden', envs.length < 2);
-  document.querySelectorAll('#envSeg button').forEach(btn => btn.onclick = () => {
-    document.querySelectorAll('#envSeg button').forEach(b => b.classList.remove('on'));
-    btn.classList.add('on'); selectedEnv = btn.dataset.env;
-  });
+// ---- Hidden server selector ----
+// No visible picker. Clicking the PulseFinalMile logo cycles the underlying
+// Grasshopper server: Pulse → Staging → CBH. The selection is bound to the
+// session at sign-in and used for everything afterwards.
+const ENV_LABEL = { production: 'Pulse', staging: 'Staging', cbh: 'CBH' };
+let availEnvs = ['production', 'staging', 'cbh'], sessionAuthed = false;
+let envTouched = false; // user has clicked the logo at least once
+function syncEnvState(s) {
+  if (s.envs && s.envs.length) availEnvs = s.envs;
+  sessionAuthed = !!s.authenticated;
+  if (!sessionAuthed && s.defaultEnv && availEnvs.includes(s.defaultEnv) && !envTouched) selectedEnv = s.defaultEnv;
 }
+$('pulseLogo').onclick = () => {
+  envTouched = true;
+  const i = availEnvs.indexOf(selectedEnv);
+  selectedEnv = availEnvs[(i + 1) % availEnvs.length];
+  const ind = $('envIndicator');
+  ind.textContent = 'Server: ' + (ENV_LABEL[selectedEnv] || selectedEnv) + (sessionAuthed ? ' — sign out & back in to apply' : '');
+  ind.classList.remove('hidden');
+};
 function showApp(s) {
   $('loginView').classList.add('hidden');
   $('appView').classList.remove('hidden');
   const b = $('topBadge'); b.classList.remove('hidden');
   if (s.mock) { b.textContent = 'Mock mode'; b.className = 'badge mock'; }
-  else { b.textContent = (s.env || '') + ' · live'; b.className = 'badge live'; }
+  else { b.textContent = (ENV_LABEL[s.env] || s.env || '') + ' · live'; b.className = 'badge live'; }
   const u = $('userbox'); u.classList.remove('hidden');
   u.innerHTML = `${esc(s.email || '')} &nbsp;·&nbsp; <a id="logoutLink">Sign out</a>`;
   $('logoutLink').onclick = async () => { await fetch('/api/logout',{method:'POST'}); location.reload(); };

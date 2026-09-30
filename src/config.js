@@ -9,21 +9,22 @@ function bool(v, dflt) {
 
 const mockMode = bool(process.env.MOCK_MODE, true);
 
-// The only production environment. Live (non-mock) servers connect here and
-// nowhere else — there is no staging option in production.
 const PRODUCTION_URL = 'https://pulsefinalmile.grasshopperlabs.net';
 const STAGING_URL = 'https://staging.grasshopperlabs.io';
+const CBH_URL = 'https://cbh.grasshopperlabs.net';
 
-// Environments offered on the login screen. Production is the single live env.
-// Staging is only available in mock/dev mode for testing; a live server exposes
-// production only.
-const envs = mockMode ? { staging: STAGING_URL, production: PRODUCTION_URL } : { production: PRODUCTION_URL };
+// Selectable Grasshopper servers, in rotation order. There is NO visible picker:
+// the server is chosen by clicking the PulseFinalMile logo in the top bar, which
+// cycles Pulse → Staging → CBH. The default is Pulse (production). The chosen
+// server is bound to the session at sign-in and used for everything (auth,
+// order creation, manifests, ...).
+const envs = { production: PRODUCTION_URL, staging: STAGING_URL, cbh: CBH_URL };
 
 const config = {
   port: parseInt(process.env.PORT || '3000', 10),
   envs,
-  // Default environment selected on the login screen.
-  defaultEnv: envs.staging ? 'staging' : 'production',
+  // Default server: Pulse (production) on live deployments, staging in dev/mock.
+  defaultEnv: mockMode ? 'staging' : 'production',
   gh: {
     baseUrl: (process.env.GH_BASE_URL || '').replace(/\/+$/, ''),
     email: process.env.GH_EMAIL || '',
