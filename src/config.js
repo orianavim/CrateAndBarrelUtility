@@ -23,8 +23,8 @@ const envs = { production: PRODUCTION_URL, staging: STAGING_URL, cbh: CBH_URL };
 const config = {
   port: parseInt(process.env.PORT || '3000', 10),
   envs,
-  // Default server: Pulse (production) on live deployments, staging in dev/mock.
-  defaultEnv: mockMode ? 'staging' : 'production',
+  // Default server: always Pulse (production). Switch via the logo rotation.
+  defaultEnv: 'production',
   gh: {
     baseUrl: (process.env.GH_BASE_URL || '').replace(/\/+$/, ''),
     email: process.env.GH_EMAIL || '',
